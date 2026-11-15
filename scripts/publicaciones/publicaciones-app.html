@@ -1,0 +1,42 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Publicaciones · Island Crew</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1320;color:#e6eefb;font:15px/1.45 Georgia,serif;padding:22px}
+h1{margin:0 0 4px;color:#6cb8ff;font-size:22px}.s{color:#9db2cf}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:end;background:#121e30;border:1px solid #4aa8ff55;border-radius:12px;padding:14px;margin:14px 0}
+label{font-size:12px;color:#9db2cf;display:block}select,input,textarea{background:#0c1624;color:#e6eefb;border:1px solid #4aa8ff55;border-radius:8px;padding:8px 10px;font:inherit}
+button{padding:9px 16px;border-radius:9px;border:1px solid #4aa8ff;background:#0a1d33;color:#6cb8ff;font:inherit;cursor:pointer}button.p{background:linear-gradient(#6cb8ff,#2f86d6);color:#0a1d33;font-weight:bold}button:disabled{opacity:.5}
+.dia{margin:18px 0 6px;color:#6cb8ff;font-weight:bold;display:flex;justify-content:space-between;align-items:center}
+.c{display:grid;grid-template-columns:150px 1fr;gap:14px;background:#121e30;border:1px solid #4aa8ff33;border-radius:12px;padding:12px;margin:8px 0}
+.c img{width:150px;height:187px;object-fit:cover;border-radius:8px;background:#0c1624}textarea{width:100%;min-height:92px}
+.t{font-size:12px;color:#9db2cf;margin-bottom:4px}.f{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.ok{color:#8fd694}.er{color:#ff8a7a}#msg{min-height:22px;margin:6px 0}
+@media(max-width:640px){.c{grid-template-columns:1fr}.c img{width:100%;height:auto}}
+.ic{display:flex;align-items:center;gap:12px;margin:-22px -22px 18px;padding:12px 22px;border-bottom:2px solid #4aa8ff;background:#00000040}.ic img{width:44px;height:44px;border-radius:50%;border:2px solid #4aa8ff;object-fit:cover}.ic b{letter-spacing:.14em;font-size:13px;color:#4aa8ff}.ic span{color:#9db2cf;font-size:12px}.ic em{margin-left:auto;font-style:normal;color:#4aa8ff;font-weight:bold}
+</style></head><body>
+<div class="ic"><img src="__AV_publicaciones__"><b>ISLAND CREW</b><span>Marketing Suite</span><em>Publicaciones</em></div>
+<h1>Publicaciones y calendario de crecimiento</h1><div class="s">Prepara tu mes de publicaciones y recibe cada día el paquete listo para subir.</div>
+<div class="bar">
+<div><label>Restaurante</label><select id="r"></select></div>
+<div><label>Empieza el</label><input type="date" id="ini"></div>
+<div><label>Duración</label><select id="dias"><option value="14">2 semanas</option><option value="30" selected>1 mes</option></select></div>
+<div><label>Publicaciones por semana</label><select id="sem"><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="7">7</option></select></div>
+<button class="p" id="crear">Crear calendario</button></div>
+<div id="msg"></div><div id="cal"></div>
+<script>
+var T="__TOKEN__",S={},$=function(x){return document.getElementById(x)};
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;")}
+function api(u,b){return fetch(u,b?{method:"POST",headers:{"content-type":"application/json","x-cv":T},body:JSON.stringify(b)}:{headers:{"x-cv":T}}).then(function(r){return r.json()})}
+function m(t,c){$("msg").className=c||"";$("msg").textContent=t}
+function carga(r){api("/api/estado?r="+encodeURIComponent(r||"")).then(function(e){S=e;$("r").innerHTML=e.restaurantes.map(function(x){return '<option'+(x==e.r?" selected":"")+'>'+esc(x)+'</option>'}).join("");pinta()})}
+function pinta(){var p=S.posts||[];if(!S.r){$("cal").innerHTML='<p class="s">Primero crea un restaurante con sus platos en Carta Viva.</p>';return}
+if(!p.length){$("cal").innerHTML='<p class="s">Aún no hay calendario. Pulsa «Crear calendario».</p>';return}
+var h="",d="";p.forEach(function(x){if(x.fecha!=d){if(d)h+="";d=x.fecha;var f=new Date(d+"T12:00:00").toLocaleDateString("es-ES",{weekday:"long",day:"numeric",month:"long"});h+='<div class="dia"><span>'+esc(f)+'</span><button data-paq="'+d+'">Preparar paquete del día</button></div>'}
+h+='<div class="c"><img loading="lazy" src="/img?r='+encodeURIComponent(S.r)+'&id='+x.id+'&t='+T+'"><div><div class="t">'+esc(x.tipo)+' · '+esc(S.platos[x.plato_id]||"")+'</div><textarea data-id="'+x.id+'" data-k="texto">'+esc(x.texto)+'</textarea><input style="width:100%;margin-top:6px" data-id="'+x.id+'" data-k="hashtags" value="'+esc((x.hashtags||[]).join(" "))+'"><div class="f"><select data-id="'+x.id+'" data-k="estado">'+["borrador","listo","publicado"].map(function(e){return '<option value="'+e+'"'+(e==x.estado?" selected":"")+'>'+e+'</option>'}).join("")+'</select><button data-tx="'+x.id+'">Escribir otro texto con IA</button></div></div></div>'});
+$("cal").innerHTML=h}
+$("r").onchange=function(){carga($("r").value)};
+$("crear").onclick=function(){$("crear").disabled=true;m("Creando calendario y textos…");api("/api/plan",{r:S.r,dias:$("dias").value,inicio:$("ini").value,semana:$("sem").value}).then(function(x){$("crear").disabled=false;if(x.ok===false){m(x.error,"er");return}m(x.n+" publicaciones creadas."+(x.aviso?" Textos básicos porque: "+x.aviso:""),x.aviso?"er":"ok");carga(S.r)})};
+$("cal").addEventListener("change",function(e){var t=e.target,id=t.getAttribute("data-id");if(!id)return;var b={r:S.r,id:id};b[t.getAttribute("data-k")]=t.value;api("/api/post",b).then(function(){m("Guardado.","ok")})});
+$("cal").addEventListener("click",function(e){var t=e.target;if(t.getAttribute("data-paq")){m("Preparando el paquete…");api("/api/paquete",{r:S.r,fecha:t.getAttribute("data-paq")}).then(function(x){m(x.ok?"Paquete listo en tu carpeta Descargas.":x.error,x.ok?"ok":"er")})}
+if(t.getAttribute("data-tx")){t.disabled=true;m("Escribiendo…");api("/api/texto",{r:S.r,id:t.getAttribute("data-tx")}).then(function(x){m(x.ok?"Texto nuevo.":x.error,x.ok?"ok":"er");carga(S.r)})}});
+$("ini").value=new Date().toISOString().slice(0,10);carga("");
+</script></body></html>

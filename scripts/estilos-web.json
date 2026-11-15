@@ -1,0 +1,137 @@
+[
+ {
+  "id": "afrobeat",
+  "nombre": "Afrobeat",
+  "tags": "afrobeat, lively percussion, light guitar, groovy bass, call-and-response chorus",
+  "bpm": [
+   98,
+   112
+  ]
+ },
+ {
+  "id": "balada",
+  "nombre": "Balada pop",
+  "tags": "pop ballad, emotional piano, soft strings, gentle drums, heartfelt vocals",
+  "bpm": [
+   66,
+   84
+  ]
+ },
+ {
+  "id": "house",
+  "nombre": "Electrónica house",
+  "tags": "house, four on the floor kick, bass, house piano, bright synth, risers, drops",
+  "bpm": [
+   120,
+   128
+  ]
+ },
+ {
+  "id": "flamenco",
+  "nombre": "Flamenco pop",
+  "tags": "flamenco pop, spanish guitar, palmas hand claps, cajon percussion, fresh",
+  "bpm": [
+   96,
+   112
+  ]
+ },
+ {
+  "id": "boombap",
+  "nombre": "Hip hop boom bap",
+  "tags": "boom bap hip hop, dry snare, heavy kick, round bass, dusty piano sample, vinyl scratches, rap flow",
+  "bpm": [
+   84,
+   94
+  ]
+ },
+ {
+  "id": "drill",
+  "nombre": "Hip hop drill",
+  "tags": "drill, sliding 808 bass, triplet hi-hats, dark, tense, aggressive rap flow",
+  "bpm": [
+   138,
+   144
+  ]
+ },
+ {
+  "id": "melodico",
+  "nombre": "Hip hop melódico",
+  "tags": "melodic hip hop, clean guitar, piano, soft 808, atmospheric, sung rap hooks",
+  "bpm": [
+   78,
+   92
+  ]
+ },
+ {
+  "id": "oldschool",
+  "nombre": "Hip hop old school",
+  "tags": "old school hip hop, 90s breakbeat, funk bass, vinyl samples, turntable scratches, party rap flow",
+  "bpm": [
+   88,
+   100
+  ]
+ },
+ {
+  "id": "folk",
+  "nombre": "Indie folk",
+  "tags": "indie folk, acoustic guitar, hand claps, ukulele, soft banjo, warm",
+  "bpm": [
+   92,
+   112
+  ]
+ },
+ {
+  "id": "lofi",
+  "nombre": "Lo-fi hip hop",
+  "tags": "lo-fi hip hop, soft piano, vinyl crackle, relaxed drums, warm bass",
+  "bpm": [
+   70,
+   86
+  ]
+ },
+ {
+  "id": "pop-tropical",
+  "nombre": "Pop tropical",
+  "tags": "tropical pop, clean guitar, bass, drums, hand claps, bright synth, summer vibe",
+  "bpm": [
+   100,
+   112
+  ]
+ },
+ {
+  "id": "reggae",
+  "nombre": "Reggae",
+  "tags": "reggae, guitar skank, deep bass, organ, relaxed, sunny",
+  "bpm": [
+   68,
+   84
+  ]
+ },
+ {
+  "id": "reggaeton",
+  "nombre": "Reguetón",
+  "tags": "reggaeton, dembow, 808 bass, synth, clean guitar, soft perreo",
+  "bpm": [
+   90,
+   98
+  ]
+ },
+ {
+  "id": "rock",
+  "nombre": "Rock",
+  "tags": "rock, electric guitars, bass, powerful drums, energy",
+  "bpm": [
+   110,
+   150
+  ]
+ },
+ {
+  "id": "trap",
+  "nombre": "Trap",
+  "tags": "trap, fast hi-hats, deep 808, dark synth, pauses",
+  "bpm": [
+   132,
+   150
+  ]
+ }
+]

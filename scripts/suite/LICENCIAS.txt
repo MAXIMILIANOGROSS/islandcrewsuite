@@ -1,0 +1,25 @@
+ISLAND CREW MARKETING SUITE · Licencias de componentes de terceros
+
+El software de Island Crew (suite, Carta Viva, asistente, plantillas) es obra de
+Maximiliano Olmos Sánchez para Island Crew Marketing. Todos los derechos reservados.
+Contacto: hola@islandcrew.es
+
+Componentes incluidos:
+
+1. FFmpeg (ejecutable ffmpeg) · https://ffmpeg.org
+   Se incluye una compilación que contiene componentes GPL (por ejemplo libx264),
+   por lo que se distribuye bajo GPL. El código fuente de FFmpeg está en
+   https://ffmpeg.org/download.html y el de cada compilación se obtiene de su
+   autor: Windows, https://www.gyan.dev/ffmpeg/builds/ ; Mac, https://www.osxexperts.net/
+   El ejecutable se usa como programa independiente, sin modificar. Puedes pedirnos
+   el código fuente correspondiente escribiendo a hola@islandcrew.es.
+
+2. Python 3.11 · https://www.python.org · licencia de la Python Software Foundation.
+   En Mac, compilación de https://github.com/astral-sh/python-build-standalone
+
+3. Pillow · https://python-pillow.org · licencia HPND.
+
+4. segno (códigos QR) · https://github.com/heuer/segno · licencia BSD-3-Clause.
+
+Cada componente conserva su propia licencia. Estas licencias no se aplican al
+software de Island Crew.

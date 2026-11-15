@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""Fábrica de música (Mac): genera con ACE-Step local las peticiones descargadas del panel «Fábrica de música».
+Uso: python3 scripts/fabrica-musica.py peticion1.json [peticion2.json ...]   (un .json puede ser una petición o una lista)
+Requisitos: servidor ACE-Step en http://127.0.0.1:8001 (variable ACESTEP_URL) y disco con ≥4 GB libres."""
+# PATH_EXTRA: el worker arranca desde launchd sin /opt/homebrew/bin; sin esto no encuentra ffmpeg ni ffprobe.
+import os as _os
+_os.environ["PATH"] = _os.pathsep.join([x for x in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/sbin"] if x not in _os.environ.get("PATH", "")] + [_os.environ.get("PATH", "")])
+
+import json, os, sys, time, shutil, hashlib, subprocess, urllib.request as u
+B = os.environ.get("ACESTEP_URL", "http://127.0.0.1:8001")
+SALIDA = os.environ.get("MUSICA_DIR", "/Volumes/T5 EVO/IslandCrewAI/musica")
+def post(ruta, cuerpo): return json.load(u.urlopen(u.Request(B + ruta, json.dumps(cuerpo).encode(), {"Content-Type": "application/json"}), timeout=60))
+def registrar(entrada):
+    """Apunta el archivo en la Biblioteca viva de la web (ISLANDCREW_URL y CRON_SECRET en tu Terminal). Devuelve el id o None."""
+    r = _web("/api/oficina/biblioteca-registrar", entrada)
+    if r: print("Biblioteca:", r)
+    else: print("(No registrado en la Biblioteca: define ISLANDCREW_URL y CRON_SECRET en tu Terminal.)")
+    return (r or {}).get("id")
+def _web(ruta, cuerpo):
+    """POST a la web con Bearer CRON_SECRET. Devuelve el JSON o None (si faltan variables o falla, la fábrica sigue)."""
+    base, tk = os.environ.get("ISLANDCREW_URL"), os.environ.get("CRON_SECRET")
+    if not base or not tk: return None
+    try: return json.load(u.urlopen(u.Request(base.rstrip("/") + ruta, json.dumps(cuerpo).encode(), {"Content-Type": "application/json", "Authorization": "Bearer " + tk}), timeout=30))
+    except Exception as e: print("(aviso web)", ruta, e); return None
+def progreso(tid, meta, fase, pc, msg="", bib=None):
+    c = {"tarea_id": tid, "titulo": meta.get("titulo") or "", "estilo": str(meta.get("estilo", "")), "fase": fase, "porcentaje": pc, "mensaje": msg}
+    if bib: c["biblioteca_id"] = bib
+    _web("/api/oficina/fabrica-progreso", c)
+def subir_audio(ruta_wav, nombre):
+    """Convierte a MP3 (si hay ffmpeg) y lo sube al almacén privado de la web para poder escucharlo desde la Oficina. Devuelve (ruta_storage, bytes) o (None, 0)."""
+    if os.environ.get("SUBIR_AUDIO_A_WEB") != "1": return None, 0   # las canciones se quedan en tu disco (T5 EVO); Supabase solo guarda la ficha
+    if not (os.environ.get("ISLANDCREW_URL") and os.environ.get("CRON_SECRET")): return None, 0
+    ext, ruta = "wav", ruta_wav
+    if shutil.which("ffmpeg"):
+        mp3 = ruta_wav[:-4] + ".mp3"
+        if os.path.exists(mp3): ext, ruta = "mp3", mp3
+        else:  # se convierte en una carpeta local: macOS puede negarle a ffmpeg (launchd) el acceso al disco externo
+            import tempfile
+            tmpd = tempfile.mkdtemp(prefix="mp3-")
+            try:
+                shutil.copyfile(ruta_wav, f"{tmpd}/a.wav")
+                if os.system(f'ffmpeg -y -loglevel error -i "{tmpd}/a.wav" -codec:a libmp3lame -b:a 192k "{tmpd}/a.mp3"') == 0 and os.path.exists(f"{tmpd}/a.mp3"): shutil.copyfile(f"{tmpd}/a.mp3", mp3); ext, ruta = "mp3", mp3
+            finally: shutil.rmtree(tmpd, ignore_errors=True)
+    tam = os.path.getsize(ruta)
+    if tam > 50 * 1024 * 1024: print("(El audio pesa más de 50 MB: no se sube. Instala ffmpeg para comprimir a MP3.)"); return None, 0
+    r = _web("/api/oficina/biblioteca-subir", {"nombre": nombre, "ext": ext})
+    if not r or not r.get("ok"): return None, 0
+    try: u.urlopen(u.Request(r["signedUrl"], open(ruta, "rb").read(), {"Content-Type": r["contentType"], "x-upsert": "true"}, method="PUT"), timeout=600); return r["path"], tam
+    except Exception as e: print("No se pudo subir el audio:", e); return None, 0
+def libre_gb(ruta="/"): return shutil.disk_usage(ruta).free / 1e9
+MIN_SALIDA_GB = float(os.environ.get("MIN_SALIDA_GB", "4"))   # espacio mínimo en el disco donde se guarda la música (el T5 EVO)
+MIN_INTERNO_GB = float(os.environ.get("MIN_INTERNO_GB", "1"))  # el disco interno solo debe tener un mínimo para no bloquear el Mac
+ULTIMA_RUTA = ""
+MAX_JINGLE_S = 15.0
+def silencio_s(ruta, thr=-42):
+    """Segundos de silencio real (> 0.25 s seguidos) que tiene el audio. Sirve para medir antes y después de afinar."""
+    r = subprocess.run(["ffmpeg", "-i", ruta, "-af", f"silencedetect=noise={thr}dB:d=0.25", "-f", "null", "-"], capture_output=True, text=True).stderr
+    return round(sum(float(x) for x in __import__("re").findall(r"silence_duration: ([\d.]+)", r)), 2)
+def afinar_jingle(ruta, thr=-42, pausa=0.35):
+    """Jingle preciso: quita el silencio del principio y del final y comprime los huecos largos (deja pausas naturales de 0,35 s). Si el hueco no es silencio real (la base sigue sonando) no cambia nada."""
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")): return
+    try:
+        antes = silencio_s(ruta, thr); d0 = _dur(ruta); tmp = ruta[:-4] + "_af.wav"
+        f = f"silenceremove=start_periods=1:start_threshold={thr}dB:stop_periods=-1:stop_duration={pausa}:stop_threshold={thr}dB:stop_silence={pausa}"
+        if subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", ruta, "-af", f, tmp]).returncode != 0 or not os.path.exists(tmp): return
+        d1 = _dur(tmp)
+        if d1 < 4.0: os.remove(tmp); print("(afinado descartado: dejaba el jingle demasiado corto)", flush=True); return
+        os.replace(tmp, ruta); print(f"Jingle afinado: {d0:.1f}s → {d1:.1f}s · silencio {antes:g}s → {silencio_s(ruta, thr):g}s", flush=True)
+    except Exception as e: print("(no se pudo afinar el jingle)", e, flush=True)
+def recortar_jingle(ruta, max_s=MAX_JINGLE_S):
+    """Los jingles publicitarios duran como máximo 15 s: si el motor se pasa, se recorta con un fundido final de 1 s."""
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")): return
+    try:
+        d = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", ruta]).decode().strip())
+        if d <= max_s + 0.05: return
+        tmp = ruta[:-4] + "_rec.wav"
+        if os.system(f'ffmpeg -y -loglevel error -i "{ruta}" -t {max_s} -af "afade=t=out:st={max_s - 1}:d=1" "{tmp}"') == 0: os.replace(tmp, ruta); print(f"Jingle recortado de {d:.1f}s a {max_s:g}s", flush=True)
+    except Exception as e: print("(no se pudo recortar el jingle)", e, flush=True)
+
+VOCES_MAC = {"mujer": ["Mónica (Premium)", "Mónica (Enhanced)", "Mónica", "Paulina (Premium)", "Paulina"], "hombre": ["Jorge (Premium)", "Jorge (Enhanced)", "Jorge", "Diego (Premium)", "Diego"]}
+def _dur(ruta):
+    return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", ruta]).decode().strip())
+def _pron(t):
+    """Pronunciación para voz española: «Island Crew» se lee «Áilan Cru» y la web «punto es» sin que se trague las palabras."""
+    import re
+    t = re.sub(r"islandcrew\s*(?:punto|\.)\s*es", "Áilan Cru punto es", str(t), flags=re.I); t = re.sub(r"island\s*crew", "Áilan Cru", t, flags=re.I)
+    return t.replace("Corralejo", "Corralého") if False else t
+_KPROC = {}
+def _kokoro_aparte(texto, voz, wav, vel=0.93):
+    """Kokoro en un entorno aparte (python 3.11 en el T5): un proceso que se queda cargado y atiende frase a frase. Devuelve "kokoro" o None."""
+    base = os.environ.get("KOKORO_VENV", "/Volumes/T5 EVO/IslandCrewAI/kokoro-venv"); py = os.path.join(base, "bin", "python"); script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kokoro-voz.py")
+    if not os.path.isfile(py) or not os.path.isfile(script): return None
+    try:
+        pr = _KPROC.get("p")
+        if pr is None or pr.poll() is not None:
+            env = dict(os.environ, HF_HOME=os.environ.get("HF_HOME", "/Volumes/T5 EVO/IslandCrewAI/hf-cache"), PYTHONUNBUFFERED="1")
+            pr = subprocess.Popen([py, script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env); _KPROC["p"] = pr
+            if "listo" not in (pr.stdout.readline() or ""): pr.kill(); _KPROC.pop("p", None); return None
+        pr.stdin.write(json.dumps({"texto": texto, "voz": voz, "vel": vel, "wav": wav}) + "\n"); pr.stdin.flush(); r = (pr.stdout.readline() or "").strip()
+        if r == "ok" and os.path.isfile(wav): return "kokoro"
+        print("(Kokoro aparte:", r[:120] + ")", flush=True)
+    except Exception as e: print("(Kokoro aparte falló:", str(e)[:100] + ")", flush=True); _KPROC.pop("p", None)
+    return None
+def sintetizar(texto, voz, salida_wav):
+    """Locución: 1) Kokoro (voz neuronal gratuita, la más natural; pip install kokoro soundfile), 2) voces del Mac «Premium/Enhanced» (Ajustes → Accesibilidad → Contenido hablado → Voces del sistema). Devuelve el motor usado o None."""
+    texto = _pron(texto)
+    try:
+        _CTX.update(ritmo="jingle", meditacion=False)
+        if _gemini_wav(texto, voz, salida_wav): return "gemini"
+    except SinVozGemini as e: print("(Voz de Gemini no disponible para el jingle: " + str(e)[:160] + "; se deja la base sin voz, no se usa la voz del Mac.)", flush=True); return None
+    try:
+        from kokoro import KPipeline; import numpy as np, soundfile as sf
+        pipe = KPipeline(lang_code="e"); trozos = [a for _, _, a in pipe(texto, voice="ef_dora" if voz == "mujer" else "em_alex", speed=0.9)]
+        if trozos: sf.write(salida_wav, np.concatenate([np.asarray(t) for t in trozos]), 24000); return "kokoro"
+    except Exception as e:
+        k = _kokoro_aparte(texto, voz, salida_wav, 0.9)
+        if k: return k
+        print("(Kokoro no disponible:", str(e)[:120] + ")", flush=True)
+    if shutil.which("say"):
+        try:
+            libres = subprocess.run(["say", "-v", "?"], capture_output=True, text=True).stdout
+            for v in VOCES_MAC.get(voz, []):
+                if v.split(" (")[0] + " " in libres or v in libres:
+                    aiff = salida_wav[:-4] + ".aiff"
+                    if subprocess.run(["say", "-v", v, "-r", "170", "-o", aiff, texto]).returncode == 0 and subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", aiff, salida_wav]).returncode == 0: return "say:" + v
+        except Exception as e: print("(say falló)", e, flush=True)
+    return None
+def narrar(ruta_base, nar):
+    """Mezcla la locución sobre la base musical: la música baja sola mientras habla (sidechain), la voz nunca se corta y la pieza acaba con un fundido justo después de la última palabra."""
+    seg = float(nar.get("segundos") or 15); voz_wav = ruta_base[:-4] + "_voz.wav"
+    _CTX["voz_gemini"] = nar.get("voz_gemini") or ("Orus" if nar.get("voz") == "hombre" else "Zephyr")  # voces con carácter publicitario; se puede fijar otra con voz_gemini
+    motor = sintetizar(str(nar.get("texto", "")), nar.get("voz", "mujer"), voz_wav)
+    if not motor: print("(No hay voz disponible: instala Kokoro o una voz Premium del Mac; se deja solo la base.)", flush=True); return ruta_base
+    try:
+        c = voz_wav[:-4] + "_c.wav"
+        if subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", voz_wav, "-af", "silenceremove=start_periods=1:start_threshold=-40dB:stop_periods=-1:stop_duration=0.3:stop_threshold=-40dB:stop_silence=0.25", c]).returncode == 0 and os.path.exists(c) and _dur(c) > 1.0: os.replace(c, voz_wav)
+    except Exception: pass
+    dv = _dur(voz_wav); tempo = 1.0
+    if dv + 1.6 > seg: tempo = min(1.25, dv / max(seg - 1.6, 1))
+    dv2 = dv / tempo; fin = round(min(seg, dv2 + 1.6), 2); salida = ruta_base[:-4] + "_nar.wav"
+    voz = ("atempo=%.3f," % tempo if tempo != 1.0 else "") + "adelay=400|400,apad=whole_dur=%.2f,highpass=f=90,acompressor=threshold=0.1:ratio=3:attack=10:release=120,volume=1.1,asplit=2[v][vs]"
+    voz = voz % fin if "%.2f" in voz else voz
+    fc = f"[1:a]{voz};[0:a]volume=0.95[b];[b][vs]sidechaincompress=threshold=0.02:ratio=10:attack=15:release=350[bg];[bg][v]amix=inputs=2:duration=longest,volume=1.8,atrim=0:{fin},afade=t=out:st={max(fin - 0.9, 0):.2f}:d=0.9[o]"
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", ruta_base, "-i", voz_wav, "-filter_complex", fc, "-map", "[o]", salida])
+    if r.returncode != 0 or not os.path.exists(salida): print("(la mezcla falló; se deja solo la base)", flush=True); return ruta_base
+    print(f"Jingle narrado con {motor}: voz {dv:.1f}s, pieza {fin:g}s", flush=True); return salida
+def _local(fn):
+    """macOS bloquea a ffmpeg/ffprobe (arrancados por launchd) el acceso al disco externo T5 («Operation not permitted»). Se trabaja en una carpeta local temporal y solo se copia el resultado final al T5 (Python sí puede escribir allí)."""
+    import functools, tempfile
+    @functools.wraps(fn)
+    def w(ruta, *a, **k):
+        if not str(ruta).startswith("/Volumes/"): return fn(ruta, *a, **k)
+        d = tempfile.mkdtemp(prefix="ic-local-")
+        try:
+            l = os.path.join(d, os.path.basename(ruta)); shutil.copyfile(ruta, l); r = fn(l, *a, **k)
+            if isinstance(r, str) and r != l and os.path.exists(r): dest = os.path.join(os.path.dirname(ruta), os.path.basename(r)); shutil.copyfile(r, dest); return dest
+            if os.path.exists(l): shutil.copyfile(l, ruta)
+            return ruta if r in (None, l) else r
+        finally: shutil.rmtree(d, ignore_errors=True)
+    return w
+afinar_jingle = _local(afinar_jingle); recortar_jingle = _local(recortar_jingle); narrar = _local(narrar)
+_KP = {}
+_CTX = {"ritmo": "pausado", "meditacion": False, "voz_gemini": None, "ultimo": 0.0}
+class SinVozGemini(Exception): pass
+def _gemini_wav(texto, voz, wav):
+    """Locución con la voz GRATUITA de Gemini (vía la web, /api/oficina/voz-gemini). Devuelve True si crea el wav (24 kHz mono). Respeta el cupo gratuito (≈1 petición cada 6 s) y reintenta si Google dice «demasiadas»; si no hay manera, lanza SinVozGemini con la causa real."""
+    import wave, urllib.error
+    if time.time() < _CTX.get("gemini_hasta", 0): raise SinVozGemini("Gemini sin cupo (429): se reintenta más tarde, sin gastar más tiempo ahora.")
+    base, tk = os.environ.get("ISLANDCREW_URL"), os.environ.get("CRON_SECRET")
+    if not base or not tk: raise SinVozGemini("Faltan ISLANDCREW_URL y CRON_SECRET en la Terminal del Mac.")
+    cuerpo = json.dumps({"texto": texto[:700], "voz": _CTX.get("voz_gemini"), "genero": voz, "meditacion": bool(_CTX.get("meditacion")), "ritmo": _CTX.get("ritmo", "pausado")}).encode(); causa = ""
+    for intento in range(6):
+        espera = 6.5 - (time.time() - _CTX["ultimo"])
+        if espera > 0: time.sleep(espera)
+        _CTX["ultimo"] = time.time()
+        try:
+            r = u.urlopen(u.Request(base.rstrip("/") + "/api/oficina/voz-gemini", cuerpo, {"Content-Type": "application/json", "Authorization": "Bearer " + tk}), timeout=75); pcm = r.read()
+            if len(pcm) < 2000: causa = "Gemini devolvió audio vacío."; continue
+            with wave.open(wav, "wb") as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000); w.writeframes(pcm)
+            return True
+        except urllib.error.HTTPError as e:
+            try: causa = json.loads(e.read().decode()).get("error", "") or str(e)
+            except Exception: causa = str(e)
+            if e.code == 429: print(f"(Gemini pide esperar; reintento {intento + 1}/6 en 40 s)", flush=True); time.sleep(40); continue
+            if e.code in (401, 403, 503): raise SinVozGemini(causa)
+        except Exception as e: causa = str(e)[:150]
+        time.sleep(5)
+    if "429" in str(causa) or "cupo" in str(causa).lower() or "wait" in str(causa).lower(): _CTX["gemini_hasta"] = time.time() + 1800
+    raise SinVozGemini(causa or "Gemini no respondió.")
+def _sint(texto, voz, wav, vel=0.93):
+    """Una frase o trozo con la voz de Gemini (la única que se usa en audiolibros y meditaciones: nunca la voz del Mac)."""
+    return "gemini" if _gemini_wav(_pron(texto), voz, wav) else None
+def _trozos(texto, mx=320):
+    import re
+    fr = [x.strip() for x in re.split(r"(?<=[.!?…])\s+", texto.replace("\n", " ")) if x.strip()]; out, a = [], ""
+    for x in fr:
+        if a and len(a) + len(x) + 1 > mx: out.append(a); a = x
+        else: a = (a + " " + x).strip()
+    if a: out.append(a)
+    return out
+def _ts(s):
+    s = int(round(s)); h, m, x = s // 3600, s % 3600 // 60, s % 60
+    return f"{h}:{m:02d}:{x:02d}" if h else f"{m}:{x:02d}"
+def _partes(texto):
+    """Trozos para narrar; las marcas [pausa N] se convierten en silencios reales de N segundos (máx. 20)."""
+    import re
+    out = []
+    for i, seg in enumerate(re.split(r"\[pausa\s+(\d+(?:[.,]\d+)?)\]", str(texto))):
+        if i % 2 == 0:
+            if seg.strip(): out += _trozos(seg)
+        else: out.append(("pausa", min(20.0, float(seg.replace(",", ".")))))
+    return out
+def mezclar_fondo(voz_mp3, fondo, vol=0.2):
+    """Pone música instrumental de fondo bajo la narración (baja sola cuando habla). Solo acepta archivos de la carpeta de música. Devuelve True si mezcló."""
+    try:
+        out = voz_mp3[:-4] + "_fondo.mp3"
+        if fondo == "mar":
+            f = voz_mp3[:-4] + "_mar.wav"
+            # Olas sintetizadas (coste cero): ruido marrón + rosa filtrado, con oleaje lento de ~11 s y espuma más aguda y breve.
+            r0 = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anoisesrc=d=120:c=brown:r=44100:a=0.9", "-f", "lavfi", "-i", "anoisesrc=d=120:c=pink:r=44100:a=0.5", "-filter_complex", "[0:a]lowpass=f=700,tremolo=f=0.1:d=0.75[ola];[1:a]highpass=f=1500,lowpass=f=6000,volume=0.18,tremolo=f=0.1:d=0.9[esp];[ola][esp]amix=inputs=2:normalize=0,aformat=channel_layouts=stereo", f])
+            if r0.returncode != 0 or not os.path.isfile(f): print("(No se pudo generar el sonido del mar)", flush=True); return False
+            vol = max(vol, 0.45)
+        else:
+            f = os.path.realpath(str(fondo or "")); raiz = os.path.realpath(SALIDA)
+            if not f.startswith(raiz + os.sep) or not os.path.isfile(f): print("(Fondo no válido o no encontrado: la narración queda sin música)", flush=True); return False
+        fc = f"[1:a]volume={vol}[bg];[0:a]asplit=2[vo][sc];[bg][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=700[bgd];[vo][bgd]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95"
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", voz_mp3, "-stream_loop", "-1", "-i", f, "-filter_complex", fc, "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "128k", out])
+        if r.returncode != 0 or not os.path.exists(out): return False
+        os.replace(out, voz_mp3)
+        if fondo == "mar":
+            try: os.remove(f)
+            except OSError: pass
+        return True
+    except Exception as x: print("(No se pudo mezclar el fondo:", str(x)[:120], ")", flush=True); return False
+def narrar_audiolibro(p, tid="audiolibro"):
+    """Narra un audiolibro entero (capítulo a capítulo, con pausas), añade marcas de tiempo por capítulo, normaliza y lo sube. Devuelve True si queda registrado."""
+    meta = p.get("meta") or {}; titulo = p.get("titulo") or meta.get("titulo") or "Audiolibro"; voz = p.get("voz", "mujer"); caps = p.get("capitulos") or []
+    if not caps: sys.exit("El audiolibro no trae capítulos.")
+    os.makedirs(SALIDA, exist_ok=True)
+    if libre_gb(SALIDA) < MIN_SALIDA_GB: sys.exit(f"El disco de salida ({SALIDA}) tiene menos de {MIN_SALIDA_GB:g} GB libres.")
+    base = os.path.join(SALIDA, time.strftime("%Y%m%d-%H%M%S") + "_audiolibro_" + "".join(c if c.isalnum() else "_" for c in titulo)[:40])
+    lento = bool(p.get("lento")); pod = p.get("tipo") == "podcast"; _CTX.update(ritmo="muy_pausado" if lento else "pausado", meditacion=lento, voz_gemini=p.get("voz_gemini")); PAU = 1.8 if lento else 0.7; vel = 0.8 if lento else (0.95 if pod else 0.93); tmp = base + "_t"; os.makedirs(tmp, exist_ok=True); lista, marcas, t, n = [], [], 0.0, 0
+    sil = os.path.join(tmp, "sil.wav"); subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", f"{PAU:.1f}", sil], check=True)
+    total = sum(len(_trozos(c["titulo"])) + len(_trozos(c["texto"])) for c in caps); hechos = 0
+    for i, c in enumerate(caps):
+        marcas.append((t, c["titulo"]))
+        for txt in ([f"{c['titulo']}."] if (lento or pod) else [f"Capítulo {i + 1}. {c['titulo']}."]) + _partes(c["texto"]):
+            w = os.path.join(tmp, f"{n:05d}.wav"); n += 1
+            if isinstance(txt, tuple):
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", f"{txt[1]:.2f}", w], check=True); lista.append(w); t += txt[1]; hechos += 1; continue
+            try: ok_v = _sint(txt, voz, w, vel)
+            except SinVozGemini as e_v: progreso(tid, meta, "fallo", 0, "Voz de Gemini: " + str(e_v)[:200]); sys.exit("Voz de Gemini no disponible: " + str(e_v))
+            if not ok_v or not os.path.exists(w): sys.exit("No se pudo narrar.")
+            t += _dur(w); lista += [w] + ([sil] if lento else []); t += PAU if lento else 0; hechos += 1
+            if hechos % 10 == 0: progreso(tid, meta, "generando", int(5 + 85 * hechos / max(total, 1)), f"Narrando capítulo {i + 1} de {len(caps)}")
+        lista.append(sil); t += PAU
+        if libre_gb() < MIN_INTERNO_GB * 0.6: sys.exit("Disco interno casi lleno: paro para no bloquear el Mac.")
+    if t < 20 * 60 and not lento and not pod: print(f"(Aviso: dura {_ts(t)}, menos de 20 minutos)", flush=True)
+    lst = os.path.join(tmp, "lista.txt"); open(lst, "w").write("".join(f"file '{x}'\n" for x in lista)); mp3 = base + ".mp3"
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lst, "-af", "loudnorm=I=-18:TP=-1.5:LRA=11,aresample=44100", "-ac", "1", "-codec:a", "libmp3lame", "-b:a", "96k", mp3])
+    if r.returncode != 0 or not os.path.exists(mp3): sys.exit("ffmpeg no pudo unir el audiolibro.")
+    shutil.rmtree(tmp, ignore_errors=True)
+    if p.get("fondo_ruta"): progreso(tid, meta, "generando", 93, "Mezclando la música instrumental de fondo"); print("Fondo musical:", "mezclado" if mezclar_fondo(mp3, p["fondo_ruta"], 0.2 if not lento else 0.28) else "NO mezclado", flush=True)
+    dur = _dur(mp3); nombre = os.path.basename(mp3)[:-4]
+    cap_txt = "\n".join(f"{_ts(x)} {tt}" for x, tt in marcas)
+    desc = str(p.get("sinopsis", ""))[:500] if (lento or pod) else (cap_txt + "\n\n" + str(p.get("sinopsis", "")))[:500]  # la Biblioteca guarda 500 caracteres: primero los capítulos
+    progreso(tid, meta, "subiendo", 95, "Subiendo el audiolibro a la web")
+    sp, tam = subir_audio(base + ".wav", nombre)
+    bib = registrar({"tipo": "cancion", "titulo": titulo, "descripcion": desc, "estilo": "podcast" if pod else "audiolibro", "idioma": "es", "origen": "fabrica", "ruta_local": mp3, "etiquetas": ["fabrica"] + (["meditacion", "sector:relax", "sub:meditaciones"] if lento else (["podcast", "sector:podcast", "sub:episodios"] if pod else ["audiolibro", "sector:audiolibros", "sub:historias"])), "storage_path": sp, "bytes": tam or None, "duracion_seg": int(dur)})
+    progreso(tid, meta, "listo", 100, f"Audiolibro de {_ts(dur)} listo", bib); print(f"Audiolibro OK {mp3} · {_ts(dur)}", flush=True); return True
+def guardar_letra(titulo, letra):
+    """Guarda la letra junto a las canciones (SALIDA/letras.json) para poder hacer después el vídeo lírico."""
+    if not letra or len(str(letra).strip()) < 20: return
+    ruta = os.path.join(SALIDA, "letras.json")
+    try: d = json.load(open(ruta, encoding="utf8"))
+    except Exception: d = {}
+    d[str(titulo)[:120]] = str(letra)[:6000]; open(ruta, "w", encoding="utf8").write(json.dumps(d, ensure_ascii=False))
+def generar(p, n):
+    global ULTIMA_RUTA
+    meta = p.pop("meta", {}); os.makedirs(SALIDA, exist_ok=True)
+    if libre_gb(SALIDA) < MIN_SALIDA_GB: sys.exit(f"El disco de salida ({SALIDA}) tiene menos de {MIN_SALIDA_GB:g} GB libres.")
+    if libre_gb() < MIN_INTERNO_GB: sys.exit(f"Disco interno con menos de {MIN_INTERNO_GB:g} GB libres: libera espacio para no bloquear el Mac.")
+    tid = post("/release_task", p)["data"]["task_id"]; print(f"[{n}] enviada {tid}", flush=True); t_ini = time.time(); progreso(tid, meta, "generando", 5, "Enviada a ACE-Step")
+    while True:
+        time.sleep(10); progreso(tid, meta, "generando", int(min(90, 5 + 85 * (1 - 2.718281828 ** (-(time.time() - t_ini) / 240)))), "Generando (porcentaje estimado por tiempo)")
+        if libre_gb() < MIN_INTERNO_GB * 0.6: sys.exit("Disco interno casi lleno: paro para no bloquear el Mac.")
+        d = post("/query_result", {"task_id_list": [tid]})["data"][0]
+        if d.get("status") == 1: break
+        if d.get("status") == 2: print("FALLO", d); progreso(tid, meta, "fallo", 0, "ACE-Step devolvió un error"); return False
+    f = json.loads(d["result"])[0]["file"]; datos = u.urlopen(B + f).read()
+    nombre = f"{time.strftime('%Y%m%d-%H%M%S')}_{meta.get('estilo','x')}_{meta.get('formato','x')}_{meta.get('idioma','es')}.wav"
+    ruta = os.path.join(SALIDA, nombre); open(ruta, "wb").write(datos); ULTIMA_RUTA = ruta
+    guardar_letra(meta.get("titulo") or nombre[:-4], p.get("lyrics"))
+    if isinstance(meta.get("narrado"), dict):
+        base = ruta; ruta = narrar(ruta, meta["narrado"])
+        if ruta == base and str(meta.get("formato", "")).startswith("jingle"): progreso(tid, meta, "fallo", 0, "No hay voz para el locutor: instala Kokoro (pip3 install kokoro soundfile) o una voz Premium del Mac. No se publica un jingle sin voz."); print("FALLO: jingle sin voz, no se registra", flush=True); return False
+        nombre = os.path.basename(ruta); ULTIMA_RUTA = ruta
+    if str(meta.get("formato", "")).startswith("jingle"):
+        if not isinstance(meta.get("narrado"), dict): afinar_jingle(ruta)
+        recortar_jingle(ruta)
+    print(f"[{n}] OK {ruta} · {len(datos)} bytes · sha256 {hashlib.sha256(datos).hexdigest()}", flush=True)
+    progreso(tid, meta, "subiendo", 95, "Subiendo el audio a la web para poder escucharlo")
+    sp, tam = subir_audio(ruta, nombre[:-4])
+    bib = registrar({"tipo": "cancion", "titulo": meta.get("titulo") or nombre[:-4], "descripcion": f"Generada con ACE-Step · {len(datos)//1024} KB", "estilo": str(meta.get("estilo", "")), "idioma": str(meta.get("idioma", "es")), "origen": "fabrica", "ruta_local": ruta, "etiquetas": ["fabrica", "ace-step"] + [x for x in ("sector:" + str(meta.get("sector", "")) if meta.get("sector") else "", "sub:" + str(meta.get("sub", "")) if meta.get("sub") else "") if x], "storage_path": sp, "bytes": tam or None, "duracion_seg": p.get("audio_duration")})
+    progreso(tid, meta, "listo", 100, "Listo para escuchar en la Oficina" if sp else "Listo en tu Mac (sin subir a la web)", bib)
+    return True
+if __name__ == "__main__":
+    pet = []
+    for a in sys.argv[1:]:
+        j = json.load(open(a)); pet += j if isinstance(j, list) else [j]
+    if not pet: sys.exit(__doc__)
+    for i, p in enumerate(pet, 1): generar(p, f"{i}/{len(pet)}")

@@ -1,0 +1,37 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Island Crew Marketing Suite</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0d0f14;color:#f1ece2;font:16px/1.5 Georgia,serif;min-height:100vh}
+.h{display:flex;align-items:center;gap:22px;padding:26px 30px;background:linear-gradient(90deg,#0d0f14,#142033);border-bottom:1px solid #ffffff18;flex-wrap:wrap}
+.h img{width:190px;height:138px;object-fit:cover;border-radius:16px;border:2px solid #ffffff30}
+.h h1{margin:0;font-size:28px;letter-spacing:.02em}.h .s{color:#aab4c4;margin-top:4px}.h small{letter-spacing:.2em;color:#aab4c4;font-size:11px}
+.g{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;padding:26px 30px}@media(max-width:640px){.g{grid-template-columns:1fr}}
+.st{display:flex;align-items:center;gap:8px;font-size:13px;color:#aab4c4;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:50%;background:#556070;display:inline-block}.dot.on{background:var(--c);box-shadow:0 0 0 4px color-mix(in srgb,var(--c) 28%,transparent);animation:p 1.6s infinite}@keyframes p{50%{box-shadow:0 0 0 8px transparent}}
+.mon{display:block;color:#aab4c4;letter-spacing:.2em;font-size:11px;margin-top:2px}
+.k{--c:#fff;background:#151922;border:1px solid color-mix(in srgb,var(--c) 45%,transparent);border-top:5px solid var(--c);border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:10px}
+.k .i{width:76px;height:76px}.k .i img{width:76px;height:76px;display:block;filter:drop-shadow(0 4px 10px #0008)}
+.k h2{margin:0;font-size:20px;color:var(--c)}.k p{margin:0;color:#cdd4df;flex:1}.k.x{opacity:.55}
+button{padding:11px 18px;border-radius:10px;border:0;background:var(--c);color:#0d0f14;font:inherit;font-weight:bold;cursor:pointer}button:disabled{background:#232a38;color:#8d98aa;cursor:default;font-weight:normal}
+.ev{margin:2px 0 6px;padding:10px 12px;background:#0d0f14;border-radius:10px;font-size:14px;color:#cdd4df}.ev div{display:flex;justify-content:space-between;gap:8px}.ev b{color:var(--c)}
+#m{min-height:24px;padding:0 30px 20px;color:#ff9a8a}small.n{color:#aab4c4}
+</style></head><body>
+<div class="h"><img src="__CONTROL__"><div><small>ISLAND CREW</small><small class="mon">Monitor de actividad</small><h1>Marketing Suite</h1><div class="s" id="neg">Tus fábricas</div></div></div>
+<div style="padding:18px 30px 0"><button onclick="location.href='/centro'" style="--c:#e2b04a">Centro de inteligencia</button></div><div class="g" id="g"></div><div id="m"></div>
+<script>
+var F=[{id:"carta",c:"#3fbf7f",i:'<img src="__IC_carta__" alt="">',t:"Carta Viva",d:"La carta de tu restaurante con un vídeo por plato, código QR y flyers."},
+{id:"publicaciones",c:"#4aa8ff",i:'<img src="__IC_publicaciones__" alt="">',t:"Publicaciones y calendario",d:"Tu mes de publicaciones listo: textos, piezas por formato y el paquete de cada día."},
+{id:"anuncios",c:"#ff6b4a",i:'<img src="__IC_anuncios__" alt="">',t:"Anuncios",d:"Publicidad de tus platos y ofertas en feed, story, cuadrado, pantalla y vídeo."},
+{id:"musica",c:"#ffb020",i:'<img src="__IC_musica__" alt="">',t:"Cabra Beats · Música",d:"Jingles y canciones para tu negocio."}];
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;")}
+function $(x){return document.getElementById(x)}
+function hace(t,ahora){if(!t)return"sin actividad aún";var m=Math.max(0,Math.floor((ahora-t)/60));if(m<1)return"ahora mismo";if(m<60)return"hace "+m+" min";if(m<1440)return"hace "+Math.floor(m/60)+" h";return"hace "+Math.floor(m/1440)+" d"}
+function pinta(e,primera){if(primera){$("neg").textContent=e.negocio?("Hola, "+e.negocio):"Tus fábricas";
+$("g").innerHTML=F.map(function(f){var lic=e.fabricas.indexOf(f.id)>=0,mus=f.id=="musica",on=lic&&(!mus||e.musica_ok);
+var nota=!lic?'<small class="n">Tu licencia no la incluye.</small>':(mus&&!e.musica_ok?'<small class="n">Necesita el motor de música instalado en este equipo. '+esc(e.musica)+'</small>':"");
+return '<div class="k'+(on?"":" x")+'" style="--c:'+f.c+'"><div class="i">'+f.i+'</div><h2>'+f.t+'</h2><p>'+f.d+'</p><div class="st" id="st-'+f.id+'"></div><div class="ev" id="ev-'+f.id+'"></div>'+nota+'<button data-f="'+f.id+'"'+(on?"":" disabled")+'>Abrir</button></div>'}).join("")}
+F.forEach(function(f){var a=e.activos&&e.activos[f.id];$("st-"+f.id).innerHTML='<i class="dot'+(a?" on":"")+'"></i><span>'+(a?"En marcha":"Parado")+'</span> · <span>Última actividad:</span> <span>'+hace(e.ultima&&e.ultima[f.id],e.ahora)+'</span>';
+$("ev-"+f.id).innerHTML=(e.evolucion&&e.evolucion[f.id]||[]).map(function(x){return '<div><span>'+esc(x[0])+'</span><b>'+x[1]+'</b></div>'}).join("")})}
+function sondea(p){fetch("/api/estado").then(function(r){return r.json()}).then(function(e){pinta(e,p)}).catch(function(){})}
+sondea(true);setInterval(function(){sondea(false)},4000);
+$("g").addEventListener("click",function(e){var f=e.target.getAttribute("data-f");if(!f)return;e.target.disabled=true;e.target.textContent="Abriendo…";
+fetch("/api/abrir",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({f:f})}).then(function(r){return r.json()}).then(function(x){e.target.disabled=false;e.target.textContent="Abrir";$("m").textContent=x.ok?"":x.mensaje})});
+</script></body></html>
