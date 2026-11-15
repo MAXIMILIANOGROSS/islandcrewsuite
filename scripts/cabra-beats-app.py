@@ -960,6 +960,10 @@ def puerto_libre():
     return 0
 def abrir_ventana(url):
     if os.environ.get("CB_NO_VENTANA"): return
+    _nat = os.path.expanduser("~/Library/Application Support/IslandCrewSuite/programa/app/bin/ventana-mac"); _ico = os.path.expanduser("~/Library/Application Support/IslandCrewSuite/programa/app/musica.icns")
+    if os.path.isfile(_nat):  # ventana propia de Mac (sin Chrome), igual que los otros tres programas
+        subprocess.Popen([_nat, "--url", url, "Cabra Beats Island Crew", _ico], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); return
+    if os.environ.get("CB_NO_VENTANA"): return
     chrome = "/Applications/Google Chrome.app"
     if os.path.isdir(chrome): subprocess.Popen(["open", "-na", "Google Chrome", "--args", "--app=" + url, "--user-data-dir=" + os.path.expanduser("~/IslandCrewAI/ventana-chrome"), "--window-size=1180,860"])
     else: subprocess.Popen(["open", url])

@@ -59,6 +59,10 @@ def lengua():
 def _diccionario():
     import i18n_data
     d = {t[0]: list(t[1:]) for t in i18n_data.T}
+    try:
+        from centro_txt import TX
+        for t in TX: d.setdefault(t[0], list(t[1:]))
+    except Exception: pass
     return d, [[p[0], list(p[1:])] for p in i18n_data.P]
 
 

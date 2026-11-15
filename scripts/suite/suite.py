@@ -216,9 +216,10 @@ def centro_post(d):
 
 class Hub(H):
     def do_GET(self):
+        marca.fijar(self.headers)
         if self.path.startswith("/api/estado"):
             c = cargar(); ok, j = lic.comprobar(c.get("licencia", ""))
-            return self._j({"negocio": c.get("negocio", ""), "fabricas": j.get("fabricas", []) if ok else [], "musica": hw(), "musica_ok": bool(musica_lanzador()), "sistema": core.SISTEMA, "evolucion": actividad()[0], "ultima": actividad()[1], "activos": actividad()[2], "ahora": int(time.time())})
+            return self._j({"negocio": c.get("negocio", ""), "nombre": (c.get("usuarios") or {}).get(c.get("actual", ""), "") if c.get("actual") else "", "email": c.get("actual", ""), "usuario_ok": bool(c.get("actual")), "fabricas": j.get("fabricas", []) if ok else [], "musica": hw(), "musica_ok": bool(musica_lanzador()), "sistema": core.SISTEMA, "evolucion": actividad()[0], "ultima": actividad()[1], "activos": actividad()[2], "ahora": int(time.time())})
         if self.path.startswith("/api/centro"):
             import centro, urllib.parse
             q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -234,6 +235,7 @@ class Hub(H):
             b = marca.html(open(os.path.join(AQUI, "centro.html"), encoding="utf8").read()).encode("utf8"); self.send_response(200); self.send_header("content-type", "text/html; charset=utf-8"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         b = open(os.path.join(AQUI, "inicio.html"), encoding="utf8").read(); b = marca.html(b).encode("utf8"); self.send_response(200); self.send_header("content-type", "text/html; charset=utf-8"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
+        marca.fijar(self.headers)
         d = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or "{}"); c = cargar(); ok, j = lic.comprobar(c.get("licencia", ""))
         if self.path.startswith("/api/conexiones"):
             import conexiones; a = d.get("a"); r = d.get("r")
@@ -250,6 +252,15 @@ class Hub(H):
             if a == "probar":
                 ok2, m = conexiones.probar(r); return self._j({"ok": ok2, "mensaje": m})
             return self._j({"ok": False})
+        if d.get("a") == "usuario_entrar":
+            import re as _re
+            em = str(d.get("email", "")).strip().lower(); nm = str(d.get("nombre", "")).strip()[:60]
+            if not _re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", em): return self._j({"ok": False, "mensaje": "Escribe un email válido."})
+            us = c.get("usuarios") or {}
+            if em not in us and not nm: return self._j({"ok": False, "nuevo": True, "mensaje": "Es la primera vez con este email: escribe también tu nombre."})
+            if nm: us[em] = nm
+            c["usuarios"] = us; c["actual"] = em; json.dump(c, open(CFG, "w", encoding="utf8")); return self._j({"ok": True})
+        if d.get("a") == "usuario_salir": c["actual"] = ""; json.dump(c, open(CFG, "w", encoding="utf8")); return self._j({"ok": True})
         if d.get("a"): return self._j(centro_post(d))
         f = d.get("f")
         if f == "musica":

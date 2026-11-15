@@ -35,14 +35,16 @@ main{padding:0 0 24px;min-width:0}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body><div class="app">
 <nav class="sb"><div class="lg"><img src="__A_logo__" alt="Island Crew Suite"></div>
-<a class="on" href="/">▦ Panel</a><a data-o="musica">♫ Cabra Beats</a><a data-o="carta">🍴 Carta Viva</a><a data-o="publicaciones">📣 Cabra Social</a><hr><a href="/centro">▤ Centro de inteligencia</a><a href="/conexiones">⚙ Conexiones</a>
+<a class="on" href="/"><span>▦</span> Panel</a><a data-o="musica"><span>♫</span> Cabra Beats</a><a data-o="carta"><span>🍴</span> Carta Viva</a><a data-o="publicaciones"><span>📣</span> Cabra Social</a><hr><a href="/centro"><span>▤</span> Centro de inteligencia</a><a href="/conexiones"><span>⚙</span> Conexiones</a>
 <div class="is"><img src="__A_isla__" alt=""></div></nav>
-<main><section class="hero"><div class="hg"></div><div class="hh"><h1 id="hi">…</h1><p>Monitor de actividad</p></div><div class="kp" id="kp"></div></section>
+<main><div id="cu" style="position:absolute;right:20px;top:52px;z-index:5;font-size:12px;color:#d6dbe5"></div><section class="hero"><div class="hg"></div><div class="hh"><h1 id="hi">…</h1><p>Monitor de actividad</p></div><div class="kp" id="kp"></div></section>
 <div class="pad"><div class="gp" id="gp"></div>
 <div class="gb"><div class="bx"><h3><span>Rendimiento del negocio</span><select id="pe"><option value="7d">7D</option><option value="30d" selected>30D</option><option value="trim">3M</option><option value="anio">1A</option></select></h3><div id="ch"></div></div>
 <div class="bx"><h3><span>Actividad reciente</span><a href="/centro" style="color:#e2b04a;font-size:12px;text-decoration:none">Ver todo →</a></h3><div id="ar"></div></div>
-<div class="bx ai"><h3><span>✦ Analista de negocio</span></h3><div class="r"><img src="__A_asistente__" alt=""><p id="an">…</p></div><div style="margin-top:10px"><button class="bt" style="--a:#55a9ff" onclick="location.href='/centro'">Ver análisis completo</button></div></div></div></div>
+<div class="bx ai"><h3><span><span>✦</span> Analista de negocio</span></h3><div class="r"><img src="__A_asistente__" alt=""><p id="an">…</p></div><div style="margin-top:10px"><button class="bt" style="--a:#55a9ff" onclick="location.href='/centro'">Ver análisis completo</button></div></div></div></div>
 <div id="m"></div>
+<div id="us" style="display:none;position:fixed;inset:0;z-index:50;background:#090E17f2;align-items:center;justify-content:center"><div style="background:#151D2B;border:1px solid #e2b04a66;border-radius:18px;padding:26px;max-width:420px;width:92%"><img src="__A_logo__" alt="" style="width:110px;display:block;margin:0 auto 10px;border-radius:12px"><h2 style="margin:0 0 4px;text-align:center">Tu usuario</h2><p style="color:#a6b1c2;margin:0 0 12px;text-align:center">Escribe tu email. Si ya tienes usuario, se abre solo; si es nuevo, te pedimos tu nombre.</p>
+<input id="ue" type="email" placeholder="Email" style="width:100%;margin:4px 0;padding:10px;border-radius:10px;border:1px solid #ffffff30;background:#0d1320;color:#fff;font:inherit"><input id="un" placeholder="Tu nombre (solo la primera vez)" style="width:100%;margin:4px 0;padding:10px;border-radius:10px;border:1px solid #ffffff30;background:#0d1320;color:#fff;font:inherit;display:none"><div id="um" style="min-height:20px;color:#ff9a8a;font-size:13px"></div><button class="bt" id="ub" style="--a:#e2b04a;width:100%">Entrar</button></div></div>
 <div class="ft"><b>CREAR. CONECTAR. AUTOMATIZAR.</b><span>Island Crew Suite · Desde las Islas Canarias · hola@islandcrew.es</span></div></main></div>
 <script>
 var DIC={},E=null,D=null,AC={musica:"#F5B32E",carta:"#43C994",social:"#55A9FF"};
@@ -67,10 +69,12 @@ var d0=D.unidades.musica.linea.d;o+='<text x="30" y="163" font-size="9" fill="#8
 function actividad(){if(!D)return;var L=[];["musica","carta","social"].forEach(function(u){(D.registros[u]||[]).slice(0,6).forEach(function(r){if(r.t&&r.t<=D.ahora)L.push([u,r])})});L.sort(function(a,b){return b[1].t-a[1].t});L=L.slice(0,5);
 $("ar").innerHTML=L.length?L.map(function(x){var r=x[1];return '<div class="ac"><i style="background:'+AC[x[0]]+'"></i><div><b>'+esc(r.n)+'</b><small>'+esc(r.k)+' · '+esc(r.e)+' · '+hace(r.t,D.ahora)+'</small></div></div>'}).join(""):'<div class="vac">'+T("Sin datos todavía")+'</div>'}
 function analista(){if(!D)return;var a=D.analista&&D.analista[0];$("an").innerHTML=a?esc(a.o)+'<br><small style="color:#a6b1c2">'+esc(a.a)+'</small>':T("Sin datos todavía")}
-function pinta(){$("hi").textContent=(E.negocio?T("Hola")+", "+E.negocio:T("Tus fábricas"))+"!";paneles();kpis()}
+function pinta(){$("us").style.display=E.usuario_ok?"none":"flex";$("cu").innerHTML=E.usuario_ok?esc(E.email)+' · <a style="cursor:pointer;color:#e2b04a" id="so">'+T("Cambiar usuario")+'</a>':"";$("hi").textContent=((E.nombre||E.negocio)?T("Hola")+" "+(E.nombre||E.negocio):T("Tus fábricas"));paneles();kpis()}
 function cargaE(){fetch("/api/estado").then(function(r){return r.json()}).then(function(e){E=e;pinta()}).catch(function(){})}
 function cargaD(){fetch("/api/centro?p="+$("pe").value).then(function(r){return r.json()}).then(function(d){if(d.error)return;D=d;DIC=d.dic||{};if(E)pinta();grafica();actividad();analista()}).catch(function(){})}
 $("pe").onchange=cargaD;cargaE();cargaD();setInterval(cargaE,4000);setInterval(cargaD,30000);
 function abrir(f,b){if(b){b.disabled=true}$("m").textContent="";fetch("/api/abrir",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({f:f})}).then(function(r){return r.json()}).then(function(x){if(b)b.disabled=false;$("m").textContent=x.ok?"":x.mensaje})}
-document.addEventListener("click",function(e){var f=e.target.getAttribute("data-f")||e.target.getAttribute("data-o");if(f)abrir(f,e.target.getAttribute("data-f")?e.target:null)});
+document.addEventListener("click",function(e){if(e.target.id=="so"){fetch("/api/usuario",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({a:"usuario_salir"})}).then(cargaE);return}
+if(e.target.id=="ub"){fetch("/api/usuario",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({a:"usuario_entrar",email:$("ue").value,nombre:$("un").value})}).then(function(r){return r.json()}).then(function(x){$("um").textContent=x.ok?"":x.mensaje;if(x.nuevo)$("un").style.display="block";if(x.ok){$("ue").value="";$("un").value="";$("un").style.display="none";cargaE()}});return}
+var f=e.target.getAttribute("data-f")||e.target.getAttribute("data-o");if(f)abrir(f,e.target.getAttribute("data-f")?e.target:null)});
 </script></body></html>
