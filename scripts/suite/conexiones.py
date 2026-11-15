@@ -108,3 +108,39 @@ def importar_dev():
 def hay_dev():
     raiz = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     return os.path.isfile(os.path.join(raiz, ".env.local"))
+
+
+def _post(url, campos, archivo=None):
+    import uuid
+    if archivo:
+        b = uuid.uuid4().hex; cuerpo = b""
+        for k, v in campos.items(): cuerpo += ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n" % (b, k, v)).encode()
+        cuerpo += ("--%s\r\nContent-Disposition: form-data; name=\"source\"; filename=\"i.jpg\"\r\nContent-Type: application/octet-stream\r\n\r\n" % b).encode() + archivo + ("\r\n--%s--\r\n" % b).encode()
+        req = urllib.request.Request(url, cuerpo, {"Content-Type": "multipart/form-data; boundary=" + b})
+    else: req = urllib.request.Request(url, urllib.parse.urlencode(campos).encode())
+    try: return json.loads(urllib.request.urlopen(req, timeout=120).read().decode("utf8"))
+    except urllib.error.HTTPError as e:
+        try: return json.loads(e.read().decode("utf8"))
+        except Exception: return {"error": {"message": "HTTP %d" % e.code}}
+    except Exception as e: return {"error": {"message": str(e)[:120]}}
+
+
+def publicar(txt, img_bytes=None, url_img="", fb=True, ig=False):
+    """Publica SOLO si la interfaz ya pidió confirmación. Devuelve el resultado de cada red, sin inventar nada."""
+    tk, pg, igid = core.clave("META_FB_PAGE_TOKEN"), core.clave("META_FB_PAGE_ID"), core.clave("META_IG_USER_ID"); out = []
+    if not tk or not pg: return "Primero conecta Facebook e Instagram (arriba)."
+    if not (txt or img_bytes or url_img): return "Escribe un texto o elige una imagen."
+    base = "https://graph.facebook.com/v19.0/"
+    if fb:
+        if img_bytes: r = _post(base + pg + "/photos", {"caption": txt, "access_token": tk}, img_bytes)
+        else: r = _post(base + pg + "/feed", {"message": txt, "access_token": tk})
+        out.append("Facebook: " + ("publicado ✓" if r.get("id") or r.get("post_id") else "no se pudo (" + r.get("error", {}).get("message", "error") + ")"))
+    if ig:
+        if not igid or not url_img.startswith("https://"): out.append("Instagram: hace falta una dirección pública (https://) de la imagen.")
+        else:
+            r = _post(base + igid + "/media", {"image_url": url_img, "caption": txt, "access_token": tk})
+            if not r.get("id"): out.append("Instagram: no se pudo (" + r.get("error", {}).get("message", "error") + ")")
+            else:
+                r2 = _post(base + igid + "/media_publish", {"creation_id": r["id"], "access_token": tk})
+                out.append("Instagram: " + ("publicado ✓" if r2.get("id") else "no se pudo (" + r2.get("error", {}).get("message", "error") + ")"))
+    return " · ".join(out) or "Marca Facebook o Instagram."

@@ -1,0 +1,19 @@
+name: Modo autónomo · producción diaria
+on:
+  schedule:
+    - cron: "5 6 * * *"
+  workflow_dispatch: {}
+jobs:
+  ciclo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Encolar la producción del día
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          test -n "$CRON_SECRET" || { echo "Falta el secreto CRON_SECRET en GitHub"; exit 1; }
+          out=$(curl -sS -L --location-trusted -m 90 -X POST -H "Authorization: Bearer $CRON_SECRET" -w '\n%{http_code}' https://islandcrew.es/api/oficina/autonomia-ciclo)
+          code=$(printf '%s' "$out" | tail -n1); body=$(printf '%s' "$out" | sed '$d')
+          echo "HTTP $code"; echo "$body"
+          [ "$code" = "200" ] || { echo "El ciclo no respondió 200"; exit 1; }

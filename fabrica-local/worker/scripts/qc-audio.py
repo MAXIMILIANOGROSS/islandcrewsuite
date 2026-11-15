@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Mide un archivo de audio con ffmpeg y escribe un JSON: duración, sonoridad (LUFS), pico, silencio más largo y recorte. Uso: qc-audio.py archivo.wav"""
+# PATH_EXTRA: el worker arranca desde launchd sin /opt/homebrew/bin; sin esto no encuentra ffmpeg ni ffprobe.
+import os as _os
+_os.environ["PATH"] = _os.pathsep.join([x for x in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/sbin"] if x not in _os.environ.get("PATH", "")] + [_os.environ.get("PATH", "")])
+
+import json, re, shutil, subprocess, sys, tempfile
+def sh(args): return subprocess.run(args, capture_output=True, text=True, timeout=600)
+def main(f):
+    out = {"duracion_s": 0.0}
+    p = sh(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", f])
+    try: out["duracion_s"] = round(float(p.stdout.strip()), 2)
+    except Exception: print(json.dumps(out)); return
+    e = sh(["ffmpeg", "-nostats", "-i", f, "-af", "loudnorm=print_format=json,astats=metadata=0", "-f", "null", "-"]).stderr
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", e, re.S)
+    if m:
+        try: j = json.loads(m.group(0)); out["lufs"] = round(float(j["input_i"]), 1); out["pico_db"] = round(float(j["input_tp"]), 1)
+        except Exception: pass
+    out["clipping"] = out.get("pico_db", -99) > -0.1
+    s = sh(["ffmpeg", "-nostats", "-i", f, "-af", "silencedetect=noise=-45dB:d=0.4", "-f", "null", "-"]).stderr
+    ds = [float(x) for x in re.findall(r"silence_duration:\s*([0-9.]+)", s)]
+    out["silencio_max_s"] = round(max(ds), 2) if ds else 0.0
+    out["silencio_total_pct"] = round(100 * sum(ds) / out["duracion_s"], 1) if out["duracion_s"] else 0.0
+    print(json.dumps(out))
+def con_copia_local(f):
+    """macOS bloquea a ffmpeg/ffprobe (arrancados por launchd) la lectura de discos externos («Operation not permitted»). Python sí puede leer el T5: se analiza una copia local temporal."""
+    if not str(f).startswith("/Volumes/"): return main(f)
+    d = tempfile.mkdtemp(prefix="qc-")
+    try:
+        c = f"{d}/audio{(f[f.rfind('.'):] if '.' in f[-6:] else '.wav')}"; shutil.copyfile(f, c); main(c)
+    finally: shutil.rmtree(d, ignore_errors=True)
+con_copia_local(sys.argv[1]) if len(sys.argv) > 1 else print("uso: qc-audio.py archivo")

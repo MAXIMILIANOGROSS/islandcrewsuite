@@ -1,0 +1,31 @@
+
+/* ===== Island Crew design tokens (P0). Fuente unica; el codigo nuevo usa estas variables, no colores literales. ===== */
+:root{
+  --ic-ink:#0A1A33; --ic-yellow:#FFD400; --ic-cream:#F4E3B8; --ic-paper:#FDFBF4; --ic-white:#ffffff;
+  --ic-text:var(--ic-ink); --ic-text-muted:#526071;
+  --ic-success:#1f7a3d; --ic-success-bg:#DDF3E1;
+  --ic-warning-bg:#FFF6BF;
+  --ic-error:#b00020; --ic-error-bg:#FFD9D5;
+  --ic-space-1:4px; --ic-space-2:8px; --ic-space-3:12px; --ic-space-4:16px; --ic-space-5:24px; --ic-space-6:32px;
+  --ic-radius-sm:0; --ic-radius-md:2px; --ic-radius-lg:6px;
+  --ic-shadow-sm:2px 2px 0 var(--ic-ink); --ic-shadow-md:4px 4px 0 var(--ic-ink); --ic-shadow-lg:8px 8px 0 var(--ic-ink);
+  --ic-motion-fast:120ms; --ic-motion-normal:220ms; --ic-motion-slow:400ms;
+  --ic-ease:cubic-bezier(.22,.9,.32,1);
+  --ic-touch:44px;
+}
+/* Primitivas */
+dialog.ic-dialog{border:3px solid var(--ic-ink);background:var(--ic-paper);color:var(--ic-ink);padding:0;max-width:min(92vw,460px);width:100%;box-shadow:var(--ic-shadow-lg)}
+dialog.ic-dialog::backdrop{background:rgba(7,24,46,.55)}
+.ic-dialog-body{padding:20px}
+.ic-btn{min-height:var(--ic-touch);padding:0 16px;border:3px solid var(--ic-ink);background:var(--ic-yellow);color:var(--ic-ink);font-weight:800;cursor:pointer;box-shadow:var(--ic-shadow-sm)}
+.ic-btn:focus-visible,dialog.ic-dialog :focus-visible{outline:3px solid var(--ic-ink);outline-offset:3px}
+.ic-btn.ghost{background:var(--ic-white)}
+.ic-skel{background:linear-gradient(90deg,#ece6d4 25%,#f6f1e2 50%,#ece6d4 75%);background-size:200% 100%;border:2px solid var(--ic-ink);opacity:.7}
+@media(prefers-reduced-motion:no-preference){
+  .ic-skel{animation:ic-shimmer 1.4s linear infinite}
+  .ic-pop{animation:ic-pop var(--ic-motion-slow) var(--ic-ease) both}
+  .ic-toast{animation:ic-rise var(--ic-motion-normal) var(--ic-ease) both}
+}
+@keyframes ic-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+@keyframes ic-pop{from{transform:scale(.8);opacity:0}to{transform:scale(1);opacity:1}}
+@keyframes ic-rise{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}

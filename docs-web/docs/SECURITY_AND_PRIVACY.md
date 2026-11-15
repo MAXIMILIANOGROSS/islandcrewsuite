@@ -1,0 +1,5 @@
+# SECURITY AND PRIVACY (estado real)
+
+Implementado y comprobado por test: funciones `security definer` con `search_path` fijo; RLS cerrada en tablas nuevas; límites (20 mensajes/min, 10 denuncias/día); solo el autor borra; solo el destinatario denuncia; el administrador ve únicamente el mensaje denunciado; ninguna función de agentes lee `net_messages`; ubicación GPS opt-in, redondeada a 4 decimales y nunca difundida; no hay claves en el código (solo `process.env`).
+
+Pendiente: (1) política de retención y borrado definitivo de mensajes (hoy lógico); (2) auditoría sistemática de las ~64 migraciones: existen `supabase/AUDITORIA_RLS.sql` y `AUDIT_RLS*.sql` para ejecutarlas; (3) revisión legal de privacidad, condiciones y RGPD (ver `docs/island-crew-legal-launch-gate.md`); (4) protección de rutas solo en cliente: cada RPC nueva debe comprobar `auth.uid()`; (5) los sonidos del juego no tienen licencia formal verificada (`/creditos`); (6) el email de administrador figura en el código cliente de `/admin/*` como filtro de interfaz; el permiso real lo da `housing_is_admin()` en servidor.

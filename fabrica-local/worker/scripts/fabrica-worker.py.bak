@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""Fábrica automática (Mac): da señal de que el PC está encendido y, si la Dirección enciende los motores, genera música con ACE-Step.
+Uso: python3 scripts/fabrica-worker.py   (lee CRON_SECRET e ISLANDCREW_URL del entorno o de ~/.islandcrew-env)
+Arranque opcional de motores (en ~/.islandcrew-env): export ACESTEP_CMD="comando que arranca ACE-Step"   export OLLAMA_CMD="open -a Ollama"
+Requisitos: Mac encendido y T5 EVO conectado. Respeta la parada de emergencia y el interruptor de motores de la web."""
+# PATH_EXTRA: el worker arranca desde launchd sin /opt/homebrew/bin; sin esto no encuentra ffmpeg ni ffprobe.
+import os as _os
+_os.environ["PATH"] = _os.pathsep.join([x for x in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/sbin"] if x not in _os.environ.get("PATH", "")] + [_os.environ.get("PATH", "")])
+
+import importlib.util, json, os, re, shlex, shutil, signal, subprocess, sys, threading, time, traceback, urllib.request as u
+RUTA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fabrica-musica.py")
+SONDEO = int(os.environ.get("FABRICA_SONDEO", "60"))
+def cargar_entorno():
+    """Lee ~/.islandcrew-env (líneas export CLAVE="valor") si las variables no están ya definidas. Los secretos nunca van en el plist."""
+    p = os.path.expanduser("~/.islandcrew-env")
+    if os.path.exists(p):
+        for l in open(p):
+            m = re.match(r'\s*export\s+(\w+)=["\']?([^"\'\n]*)["\']?', l)
+            if m and not os.environ.get(m.group(1)): os.environ[m.group(1)] = m.group(2)
+    os.environ.setdefault("ISLANDCREW_URL", "https://islandcrew.es")
+def vivo(url):
+    try: u.urlopen(url, timeout=4); return True
+    except Exception as e: return hasattr(e, "code")  # un 404 también significa que el servidor responde
+_lanzado = {}
+_ordenes = {}  # órdenes de la web que recoge el hilo de fondo mientras se trabaja: el bucle principal las ejecuta (antes se perdían)
+_enfria = {}  # origen del trabajo → hasta cuándo no se reclama (un tipo atascado NO frena a los demás ni a las órdenes de la web)
+_lat = {"t": 0.0, "trab": ""}  # último latido enviado y trabajo en curso (lo comparten el bucle principal y el hilo de señal)
+def _latido_fondo(fm):
+    """Señal de vida INDEPENDIENTE del trabajo: mientras se genera una canción, se sube un vídeo o se espera tras un fallo (varios minutos), el bucle principal no puede avisar; este hilo sí, cada SONDEO segundos."""
+    while True:
+        time.sleep(15)
+        try:
+            if time.time() - _lat["t"] >= SONDEO:
+                _lat["t"] = time.time(); r = fm._web("/api/oficina/pc-latido", dict(estado(fm, _lat["trab"]), vida_solo=True))
+                for k in ("actualizar", "reactivar", "liberar", "reautorizarYoutube"):
+                    if (r or {}).get(k): _ordenes[k] = r[k]
+                if (r or {}).get("cancelar") and _lat["trab"]: _lat["cancelar"] = True; os.kill(os.getpid(), signal.SIGALRM)  # la Dirección cancela la pieza en curso
+        except Exception: pass
+_directo = {"p": None, "t": 0.0}
+def gestionar_directo(quiere):
+    """Directo 24/7 a YouTube: la web decide (interruptor de la Dirección); el worker arranca o para el emisor. Si el emisor se cae, se relanza como mucho cada 5 min."""
+    p = _directo["p"]
+    if quiere and (p is None or p.poll() is not None):
+        if p is not None: print("Directo: el emisor terminó con código", p.returncode, flush=True)
+        if time.time() - _directo["t"] < 300: return
+        _directo["t"] = time.time(); _directo["p"] = subprocess.Popen([sys.executable, os.path.join(os.path.dirname(RUTA), "directo-youtube.py")]); print("Directo: emisor arrancado.", flush=True)
+    elif not quiere and p is not None:
+        if p.poll() is None: p.terminate()
+        _directo["p"] = None; print("Directo: parado por la Dirección.", flush=True)
+def _vigilante():
+    """PERRO GUARDIÁN: si el bucle principal no da señales durante demasiado tiempo (colgado en una red, ffmpeg o ACE-Step), el worker se cierra solo y launchd (KeepAlive) lo vuelve a arrancar limpio."""
+    while True:
+        time.sleep(30)
+        try:
+            if time.time() - _lat.get("pulso", time.time()) > _lat.get("limite", 900):
+                print("VIGILANTE: el worker lleva %d s sin avanzar; se reinicia solo." % (time.time() - _lat["pulso"]), flush=True); os._exit(3)
+        except Exception: pass
+def limpiar_temporales(horas=3):
+    """Borra los restos de trabajos cortados (carpetas temporales de subidas, vídeos e imágenes de más de unas horas): el vigilante reinicia el worker sin dejarle limpiar y el disco interno se llena."""
+    import tempfile, fnmatch
+    base = tempfile.gettempdir(); borradas = 0; limite = time.time() - horas * 3600
+    try:
+        for n in os.listdir(base):
+            if not any(fnmatch.fnmatch(n, pat) for pat in ("yt-*", "ic_yt_*", "ic_img_*", "kv-*", "ic_*")): continue
+            ruta = os.path.join(base, n)
+            try:
+                if os.path.isdir(ruta) and not os.path.islink(ruta) and os.path.getmtime(ruta) < limite: shutil.rmtree(ruta, ignore_errors=True); borradas += 1
+            except Exception: pass
+    except Exception: pass
+    if borradas: print("Temporales: %d carpetas de trabajos cortados borradas." % borradas, flush=True)
+    return borradas
+def _comando_ollama():
+    """Cómo arrancar Ollama en ESTE Mac: el comando de ~/.islandcrew-env, la app de Ollama o el binario «ollama serve». None si no está instalado."""
+    if os.environ.get("OLLAMA_CMD"): return os.environ["OLLAMA_CMD"]
+    for ap in ("/Applications/Ollama.app", os.path.expanduser("~/Applications/Ollama.app")):
+        if os.path.isdir(ap): return "open -a " + shlex.quote(ap)
+    for b in (shutil.which("ollama"), "/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"):
+        if b and os.path.isfile(b): return shlex.quote(b) + " serve"
+    return None
+def arrancar(nombre, cmd):
+    """Arranca un motor si está caído y hay un comando configurado (como mucho una vez cada 10 minutos)."""
+    if not cmd:
+        if nombre == "Ollama" and time.time() - _lanzado.get("aviso-ollama", 0) > 3600: _lanzado["aviso-ollama"] = time.time(); print("Ollama no está instalado en este Mac (ni la app ni el comando «ollama»): instálalo desde ollama.com o define OLLAMA_CMD en ~/.islandcrew-env.", flush=True)
+        return
+    if time.time() - _lanzado.get(nombre, 0) < 180: return  # un motor caído se vuelve a levantar solo cada 3 min como mucho
+    _lanzado[nombre] = time.time()
+    try: subprocess.Popen(shlex.split(cmd), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); print("Arrancando", nombre, flush=True)
+    except Exception as e: print("No se pudo arrancar", nombre, e, flush=True)
+_yt = {"t": 0, "estado": ""}
+def estado_youtube():
+    """Estado del permiso de YouTube, comprobado como mucho cada 30 min."""
+    if time.time() - _yt["t"] > 1800 or not _yt["estado"]:
+        try:
+            sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(RUTA), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt); _yt["estado"] = yt.estado_permiso()
+        except BaseException: _yt["estado"] = "sin_autorizar"
+        _yt["t"] = time.time()
+    return _yt["estado"]
+def reautorizar_youtube():
+    """Abre el navegador del Mac para autorizar YouTube (el trabajador corre en tu sesión, así que puede)."""
+    try: subprocess.Popen([sys.executable, os.path.join(os.path.dirname(RUTA), "youtube-subir.py"), "--reautorizar"], stdout=open(os.path.expanduser("~/Library/Logs/islandcrew-youtube-auth.log"), "a"), stderr=subprocess.STDOUT, start_new_session=True); _yt["t"] = time.time() + 600; _yt["estado"] = "reautorizando"; print("Reautorizando YouTube: mira el navegador del Mac", flush=True)
+    except Exception as x: print("No se pudo abrir la reautorización:", x, flush=True)
+def actualizar_scripts():
+    """Descarga la última versión de los scripts desde la web y, si cambió algo, se reinicia (launchd lo vuelve a arrancar). Valida la sintaxis antes de escribir y guarda copia .bak."""
+    try:
+        rq = u.Request(os.environ["ISLANDCREW_URL"].rstrip("/") + "/api/oficina/worker-scripts", headers={"Authorization": "Bearer " + os.environ["CRON_SECRET"]})
+        d = json.load(u.urlopen(rq, timeout=60)); arch = d.get("archivos") or {}; carpeta = os.path.dirname(RUTA); cambios = []
+        for n in ("fabrica-worker.py", "fabrica-musica.py", "youtube-subir.py", "youtube-analytics.py", "video-lirico.py", "video-cine.py", "video-marca.py", "kitchen-video.py", "kitchen-intro.py", "kitchen-episodio.py", "qc-audio.py", "directo-youtube.py", "kokoro-voz.py"):
+            c = arch.get(n)
+            if not isinstance(c, str) or len(c) < 200: continue  # un archivo que el servidor aún no entrega no debe bloquear la actualización de los demás
+            compile(c, n, "exec")
+            ruta = os.path.join(carpeta, n); actual = open(ruta, encoding="utf8").read() if os.path.exists(ruta) else ""
+            if actual != c: cambios.append((n, ruta, actual, c))
+        for n, ruta, actual, c in cambios:
+            if actual: open(ruta + ".bak", "w", encoding="utf8").write(actual)
+            open(ruta + ".nuevo", "w", encoding="utf8").write(c); os.replace(ruta + ".nuevo", ruta)
+        if cambios: print("Actualizado desde la web:", ", ".join(x[0] for x in cambios), "· reiniciando", flush=True); return True
+    except Exception as x: print("No se pudo actualizar:", str(x)[:200], flush=True)
+    return False
+ACE_CMD_DEFECTO = "bash -lc 'cd ~/IslandCrewAI/ACE-Step-1.5 && PATH=$HOME/.local/bin:$PATH ./start_api_server_macos.sh >> ~/IslandCrewAI/acestep.log 2>&1'"
+def reactivar(motor):
+    """Orden desde la web: reinicia ACE-Step (mata el proceso y lo vuelve a lanzar) u Ollama."""
+    try:
+        if motor == "acestep":
+            subprocess.run(["pkill", "-f", "start_api_server_macos"], timeout=10); time.sleep(3)
+            subprocess.Popen(shlex.split(os.environ.get("ACESTEP_CMD") or ACE_CMD_DEFECTO), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); _lanzado["ACE-Step"] = time.time(); print("ACE-Step: reinicio pedido desde la web.", flush=True)
+        elif motor == "ollama":
+            subprocess.Popen(shlex.split(_comando_ollama() or "true"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True); _lanzado["Ollama"] = time.time(); print("Ollama: arranque pedido desde la web.", flush=True)
+    except Exception as x: print("No se pudo reactivar", motor, x, flush=True)
+def estado(fm, trabajando=""):
+    ace = vivo(fm.B + "/health"); oll = vivo("http://127.0.0.1:11434"); t5 = os.path.isdir(os.path.dirname(fm.SALIDA.rstrip("/")))
+    return {"acestep": ace, "ollama": oll, "t5": t5, "libreInternoGb": round(shutil.disk_usage("/").free / 1e9, 1), "libreT5Gb": round(shutil.disk_usage(fm.SALIDA if os.path.isdir(fm.SALIDA) else "/").free / 1e9, 1) if t5 else 0, "trabajando": trabajando, "youtube": estado_youtube()}
+def subir_youtube(fm, t, publicar):
+    """Sube la canción recién hecha a YouTube. Solo con el interruptor «publicar» encendido en la web; si no, no sube nada."""
+    if not publicar: print("YouTube: no se sube porque el interruptor «publicar» del Modo autónomo está apagado en la web.", flush=True); return
+    if not getattr(fm, "ULTIMA_RUTA", ""): print("YouTube: no hay archivo de audio que subir.", flush=True); return
+    try:
+        sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(RUTA), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+        url, est = yt.subir_autonomo(fm.ULTIMA_RUTA, (t.get("titulo") or "Island Crew")[:100], True, int(os.environ.get("YT_MAX_DIA", "6"))); print("YouTube:", est, url or "", flush=True)
+        if url and "/video/" in url:  # anota con qué estilo se hizo, para que luego la oficina aprenda de sus cifras
+            m = ((t.get("peticion") or {}).get("meta") or {}); fm._web("/api/oficina/aprendizaje", {"accion": "registrar", "canal": "youtube", "ref": url.split("/video/")[1].split("/")[0], "titulo": (t.get("titulo") or "")[:120], "estilo": m.get("estilo", ""), "formato": m.get("formato", "")})
+    except SystemExit as x: print("YouTube no subió:", str(x)[:200], flush=True)
+    except Exception as x: print("YouTube no subió:", str(x)[:200], flush=True)
+def liberar(fm):
+    """Libera espacio de lo ya subido. Por defecto borra los audios en cuanto están subidos (LIBERAR_DIAS=0); LIBERAR_DIAS=7 espera 7 días; LIBERAR_DIAS=-1 lo desactiva. Nunca borra algo sin comprobar que está subido."""
+    try: dias = int(os.environ.get("LIBERAR_DIAS", "0"))
+    except ValueError: dias = 0
+    if dias < 0: return
+    try:
+        sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(RUTA), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+        n, g = yt.liberar_subidos(fm.SALIDA, dias)
+        if n: print(f"Espacio liberado: {n} archivos ya subidos, {g} GB", flush=True)
+        try:
+            nw = yt.reintentar_liberar_web(fm._web)
+            if nw: print(f"Audios liberados de la web (reintento): {nw}", flush=True)
+        except Exception as x2: print("Reintento de liberar la web falló (se repite en 1 h):", str(x2)[:120], flush=True)
+    except Exception as x: print("No se pudo liberar espacio:", str(x)[:200], flush=True)
+def resumen_disco(fm, n, g):
+    """Texto para la web: qué se liberó y qué carpetas grandes llenan el disco interno (solo lo que el servicio puede leer)."""
+    import subprocess
+    home = os.path.expanduser("~"); filas = []
+    for base in (home, os.path.join(home, "Library")):
+        try:
+            for nombre in os.listdir(base):
+                ruta = os.path.join(base, nombre)
+                if os.path.islink(ruta) or not os.path.isdir(ruta) or ruta == os.path.join(home, "Library") or (base == home and nombre.startswith(".") and nombre != ".Trash"): continue
+                try: kb = int(subprocess.run(["du", "-sk", ruta], capture_output=True, text=True, timeout=25).stdout.split()[0])
+                except Exception: continue
+                filas.append((kb, ruta.replace(home, "~")))
+        except Exception: pass
+    filas.sort(reverse=True)
+    txt = f"Liberado de lo ya subido: {n} archivos, {g} GB." if n else "No había archivos ya subidos que borrar."
+    txt += "\nLo que más ocupa en el disco interno: " + (" · ".join(f"{r} {round(k/1e6,1)} GB" for k, r in filas[:6]) if filas else "no se pudo leer (macOS bloquea Descargas/Documentos/Escritorio al servicio).")
+    txt += "\nLa Papelera y Descargas/Documentos hay que vaciarlas tú desde el Finder."
+    return txt
+def medir_youtube(fm):
+    """Lee las cifras reales de lo subido y las manda a la web. Devuelve un aviso si no se pudo."""
+    try:
+        sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(RUTA), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+        medidas, aviso = yt.medir_youtube(30)
+        if medidas: fm._web("/api/oficina/aprendizaje", {"accion": "medir", "medidas": medidas}); print(f"Aprendizaje: {len(medidas)} piezas medidas en YouTube", flush=True)
+        try:
+            sa = importlib.util.spec_from_file_location("yta", os.path.join(os.path.dirname(RUTA), "youtube-analytics.py")); ya = importlib.util.module_from_spec(sa); sa.loader.exec_module(ya); ra = ya.medir(28)
+            print("Analítica de YouTube:", ra, flush=True)
+            if not ra.get("ok") and not aviso: aviso = ra.get("motivo", "")
+        except BaseException as x2: print("(analítica no disponible)", str(x2)[:120], flush=True)
+        return aviso
+    except BaseException as x: return "no se pudo medir YouTube: " + str(x)[:120]
+def liberar_ahora(fm):
+    try:
+        sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(RUTA), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+        n, g = yt.liberar_subidos(fm.SALIDA, 0)
+    except Exception as x: n, g = 0, 0; print("No se pudo liberar:", str(x)[:200], flush=True)
+    return resumen_disco(fm, n, g)
+LOG = os.path.expanduser("~/Library/Logs/islandcrew-fabrica.log")
+def rotar_log():
+    """El registro no crece sin límite: pasado 5 MB se queda con las últimas líneas."""
+    try:
+        if os.path.getsize(LOG) > 5_000_000:
+            with open(LOG, "rb") as f: f.seek(-300_000, 2); resto = f.read().split(b"\n", 1)[-1]
+            with open(LOG, "wb") as f: f.write(resto)
+    except Exception: pass
+def comprobar_escritura(fm):
+    """Antes de reclamar un trabajo se comprueba que el T5 se puede ESCRIBIR. Así un permiso de macOS que falta no quema trabajos de la cola: se avisa en el panel con el arreglo exacto y se reintenta solo."""
+    try:
+        os.makedirs(fm.SALIDA, exist_ok=True); t = os.path.join(fm.SALIDA, ".escritura-ok"); open(t, "w").write("ok"); os.remove(t); return True, ""
+    except PermissionError: return False, "Sin permiso para escribir en el disco T5 (macOS). Arreglo: Ajustes del Sistema → Privacidad y seguridad → Acceso completo al disco → añade /usr/bin/python3 y /usr/bin/caffeinate. La Fábrica reintenta sola cada minuto."
+    except OSError as x: return False, f"No se puede escribir en el T5: {str(x)[:120]}. Comprueba que el disco está conectado y desbloqueado. Reintento automático."
+class _Tiempo(Exception): pass
+def _alarma(*_):
+    if _lat.get("cancelar"): _lat["cancelar"] = False; raise _Tiempo("cancelada por la Dirección")
+    raise _Tiempo("la generación superó 25 minutos y se canceló para no bloquear la Fábrica")
+def medir_y_registrar(fm, t, desde):
+    """Mide con ffmpeg el último audio terminado y lo registra como obra en la web (sin escribir nada a mano). Si algo falla, la Fábrica sigue."""
+    try:
+        cands = []
+        for raiz, ds, fs in os.walk(fm.SALIDA):
+            ds[:] = [d for d in ds if not d.startswith("_")]
+            for f in fs:
+                if f.endswith(".wav") and not any(x in f for x in ("_voz", "_c.", "_af", "_rec", "_nar")):
+                    p = os.path.join(raiz, f)
+                    if os.path.getmtime(p) >= desde - 5: cands.append(p)
+        if not cands: return "sin_audio"
+        ruta = max(cands, key=os.path.getmtime)
+        sp = os.path.join(os.path.dirname(RUTA), "qc-audio.py"); r = subprocess.run([sys.executable, sp, ruta], capture_output=True, text=True, timeout=900)
+        audio = json.loads(r.stdout.strip().splitlines()[-1]); pet = t.get("peticion") or {}; meta = pet.get("meta") or {}
+        tipo = "audiolibro" if pet.get("accion") == "narrar-audiolibro" else ("jingle" if "jingle" in str(meta.get("formato", "")) or "jingle" in str(t.get("origen", "")) else "cancion")
+        r = fm._web("/api/oficina/obras-registrar", {"titulo": t.get("titulo") or os.path.basename(ruta), "tipo": tipo, "archivo": os.path.basename(ruta), "audio": audio})
+        d = (r or {}).get("decision", "sin_respuesta"); print("Control de calidad:", t.get("titulo"), "→", d, (r or {}).get("total", ""), flush=True); return d
+    except Exception as x: print("(aviso) medición de calidad no registrada:", str(x)[:200], flush=True); return "sin_respuesta"
+def main():
+    cargar_entorno()
+    if not os.environ.get("CRON_SECRET"): sys.exit("Falta CRON_SECRET (en el entorno o en ~/.islandcrew-env).")
+    spec = importlib.util.spec_from_file_location("fm", RUTA); fm = importlib.util.module_from_spec(spec); spec.loader.exec_module(fm)
+    print("PC encendido: fábrica automática en marcha. Señal cada", SONDEO, "s", flush=True)
+    _lat["pulso"] = time.time(); _lat["limite"] = 900; threading.Thread(target=_vigilante, daemon=True).start()
+    threading.Thread(target=_latido_fondo, args=(fm,), daemon=True).start()
+    ultima_limpieza = 0; ultima_act = 0; aviso_pend = ""; ultima_med = 0; racha = 0; ultimo_aviso_t5 = ""; fallos_vuelta = 0; ultima_rot = 0
+    limpiar_temporales()
+    if actualizar_scripts(): sys.exit(0)
+    aviso_pend = "✔ %s · worker en marcha (arrancó o se reinició ahora)" % time.strftime("%H:%M")
+    while True:
+        _lat["pulso"] = time.time(); _lat["limite"] = 900
+        try:
+            if time.time() - ultima_rot > 3600: rotar_log(); ultima_rot = time.time()
+            if time.time() - ultima_limpieza > 3600: liberar(fm); limpiar_temporales(); ultima_limpieza = time.time()
+            if time.time() - ultima_med > 6 * 3600:
+                ultima_med = time.time(); am = medir_youtube(fm)
+                if am: aviso_pend = "Aprendizaje: " + am
+            e = estado(fm); e["aviso"] = aviso_pend; aviso_pend = ""; _lat["t"] = time.time(); r = fm._web("/api/oficina/pc-latido", e)
+            if _ordenes: r = dict(r or {}); r.update(_ordenes); _ordenes.clear()
+            if (r or {}).get("liberar"): aviso_pend = liberar_ahora(fm)
+            if (r or {}).get("actualizar") or time.time() - ultima_act > 3600:
+                ultima_act = time.time()
+                if actualizar_scripts(): sys.exit(0)  # launchd lo vuelve a arrancar con el código nuevo
+            if (r or {}).get("reactivar"): reactivar(r["reactivar"]); aviso_pend = "✔ %s · el Mac recibió la orden y reinició %s" % (time.strftime("%H:%M"), r["reactivar"])
+            if r is not None and "directo" in r: gestionar_directo(bool(r["directo"]))
+            if (r or {}).get("reautorizarYoutube"): reautorizar_youtube()
+            publicar = bool((r or {}).get("publicar"))
+            if not (r or {}).get("motores"): time.sleep(SONDEO); continue  # motores apagados en la web, o parada de emergencia
+            if not e["acestep"]: arrancar("ACE-Step", os.environ.get("ACESTEP_CMD") or ACE_CMD_DEFECTO); 
+            if not e["ollama"]: arrancar("Ollama", _comando_ollama())
+            if not e["t5"]: time.sleep(SONDEO); continue  # sin disco no se reclama trabajo
+            sin_musica = not e["acestep"]  # sin ACE-Step solo se hacen subidas a YouTube y Kitchen (no necesitan generar música)
+            ok_t5, msg_t5 = comprobar_escritura(fm)
+            if not ok_t5:
+                if msg_t5 != ultimo_aviso_t5: print(msg_t5, flush=True); ultimo_aviso_t5 = msg_t5
+                aviso_pend = msg_t5; time.sleep(SONDEO); continue  # no se reclama trabajo hasta poder escribir
+            ultimo_aviso_t5 = ""
+            r = fm._web("/api/oficina/fabrica-cola", {"accion": "reclamar", "sin_musica": sin_musica, "excluir": [o for o, h in _enfria.items() if h > time.time()]}); t = (r or {}).get("trabajo")
+            if not t:
+                tk = fm._web("/api/oficina/produccion-tick", {})  # motor autónomo de audiolibros: un paso por vuelta mientras el Mac está libre
+                if tk and tk.get("accion") not in ("apagado", "objetivo semanal de audiolibros cumplido", "tope diario de IA", "cola del Mac llena", "sin IA gratuita", "parada de emergencia"): print("Producción autónoma:", tk.get("accion"), flush=True)
+                time.sleep(SONDEO); continue
+            print("Trabajo:", t.get("titulo"), flush=True); _lat["trab"] = t.get("titulo") or ""; _lat["t"] = time.time(); fm._web("/api/oficina/pc-latido", estado(fm, t.get("titulo") or "")); ok, err = False, ""
+            inicio_trabajo = time.time(); _lat["pulso"] = inicio_trabajo; _lat["limite"] = (7200 if (t.get("peticion") or {}).get("accion") == "narrar-audiolibro" else 1500) + 420
+            try:
+                signal.signal(signal.SIGALRM, _alarma); signal.alarm(7200 if (t.get("peticion") or {}).get("accion") == "narrar-audiolibro" else 1500)  # tope de 25 min por canción (2 h por audiolibro)
+                if (t.get("peticion") or {}).get("accion") == "subir-youtube":
+                    sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(RUTA), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+                    url = yt.subir_pedido(fm._web, t["peticion"], os.path.join(fm.SALIDA, "_yt_tmp")); ok = True; err = ""; print("YouTube (pedido desde la web):", url, flush=True)
+                elif (t.get("peticion") or {}).get("accion") in ("kitchen-video", "kitchen-publicar", "shorts-video", "shorts-publicar"):
+                    sk = importlib.util.spec_from_file_location("kv", os.path.join(os.path.dirname(RUTA), "kitchen-video.py")); kv = importlib.util.module_from_spec(sk); sk.loader.exec_module(kv)
+                    ok = bool({"kitchen-video": kv.procesar, "kitchen-publicar": kv.publicar, "shorts-video": kv.procesar_short, "shorts-publicar": kv.publicar_short}[t["peticion"]["accion"]](fm, t)); err = "" if ok else "Vídeo: ver el panel (tomas, voz o YouTube)"
+                elif (t.get("peticion") or {}).get("accion") == "narrar-audiolibro":
+                    ok = bool(fm.narrar_audiolibro(t["peticion"], str(t.get("id", "audiolibro")))); err = ""
+                else:
+                    ok = bool(fm.generar(t["peticion"], "auto")); err = "" if ok else "ACE-Step devolvió un error"
+            except SystemExit as x: err = str(x)[:250]
+            except Exception as x: err = str(x)[:250]
+            finally: signal.alarm(0)
+            decision = medir_y_registrar(fm, t, inicio_trabajo) if (ok and (t.get("peticion") or {}).get("accion") != "subir-youtube") else "n/a"
+            if ok and str(t.get("origen", "")) not in ("letra", "youtube", "kitchen", "shorts") and (t.get("peticion") or {}).get("accion") not in ("kitchen-video", "kitchen-publicar", "shorts-video", "shorts-publicar"):
+                if decision in ("rechazar", "bloqueada"): print("No se sube a YouTube: el control de calidad la rechaza (", decision, "). Queda en el Media Command Center para corregir o descartar.", flush=True)
+                else:
+                    if decision not in ("publicable", "n/a"): print("Control de calidad:", decision, "→ se sube igualmente (solo se frenan las rechazadas o bloqueadas; si no se pudo medir no se bloquea).", flush=True)
+                    subir_youtube(fm, t, publicar)  # las canciones hechas a mano desde una letra no se suben solas
+            if ok: liberar(fm)
+            _lat["trab"] = ""; fm._web("/api/oficina/fabrica-cola", {"accion": "terminar", "id": t["id"], "ok": ok, "error": err})
+            racha = 0 if ok else racha + 1
+            if not ok:
+                # Pausa SOLO del tipo de trabajo que falla (antes el worker entero se dormía hasta 3 h y no leía ni las órdenes de los botones ni hacía canciones).
+                origen_t = str(t.get("origen") or "otro"); cupo = any(x in err.lower() for x in ("quota", "429", "cupo")); es_yt = (t.get("peticion") or {}).get("accion") == "subir-youtube"
+                espera = 10800 if (cupo and es_yt) else (2700 if cupo else min(300 * racha, 1800)); _enfria[origen_t] = time.time() + espera
+                print("Fallo:", err, f"(racha {racha}). «{origen_t}» en pausa {espera // 60} min" + (" (cuota de YouTube agotada: las subidas que fallen se vuelven a pedir con «Subir TODO»)" if (cupo and es_yt) else "") + "; el resto de trabajos y las órdenes de la web siguen.", flush=True); time.sleep(5)
+            fallos_vuelta = 0
+        except SystemExit: raise
+        except Exception:
+            fallos_vuelta += 1; print("Error inesperado (la Fábrica sigue viva, reintento):", traceback.format_exc()[-400:], flush=True); time.sleep(min(SONDEO * fallos_vuelta, 600))
+if __name__ == "__main__": main()

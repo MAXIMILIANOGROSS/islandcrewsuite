@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Avatar · Cabra Beats</title>
+<style>
+:root{--bg:#070b12;--pan:#0e1522;--line:#ffffff1c;--tx:#eaf2ff;--m:#8fa3c2;--cy:#35d0ff;--au:#ffb800;--tq:#0fb5a8}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#0f2a3a 0,#070b12 60%);color:var(--tx);font:14px/1.4 -apple-system,system-ui,sans-serif;min-height:100vh}
+header{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 18px;border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0 12px 0 0}header a{color:var(--cy);text-decoration:none}
+button,select{background:#13203a;color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font:inherit;cursor:pointer}
+button.main{background:linear-gradient(180deg,#ffb800,#e59a00);color:#1b1200;border:0;font-weight:700}button:disabled{opacity:.5;cursor:default}
+.bar{display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:10px 18px;border-bottom:1px solid var(--line);color:var(--m)}
+.bar label{display:flex;gap:6px;align-items:center}input[type=range]{width:110px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px 18px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.pan{position:relative;background:var(--pan);border:1px solid var(--line);border-radius:18px;overflow:hidden;aspect-ratio:4/3}
+.pan h2{position:absolute;left:12px;top:8px;margin:0;font-size:12px;color:var(--m);z-index:3;letter-spacing:.08em;text-transform:uppercase}
+#v,#ov{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+#c{position:absolute;inset:0;width:100%;height:100%}
+#pa.fv{background:#0a0}#pa.fa{background:linear-gradient(180deg,#1b1f2b,#06080d)}
+#pa.ft{background:repeating-conic-gradient(#2a2f3a 0 25%,#1a1e27 0 50%) 0 0/24px 24px}
+#msg{padding:0 18px 6px;color:var(--au);min-height:20px}
+.st{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;padding:0 18px 12px}
+.st div{background:#ffffff08;border:1px solid var(--line);border-radius:12px;padding:8px 10px}.st b{display:block;font-size:16px;color:var(--cy)}
+.st small{color:var(--m)}
+pre{margin:0 18px 24px;padding:12px;background:#ffffff08;border:1px solid var(--line);border-radius:12px;white-space:pre-wrap;color:var(--m);font-size:12px}
+</style></head><body>
+<header><h1>🐐 Avatar de la cabra · prueba de seguimiento</h1><a href="/">← Volver a Cabra Beats</a>
+<button class="main" id="ini">📷 Activar cámara</button><button id="cal" disabled>🎯 Calibrar (mírate al frente)</button><button id="demo">▶ Demo del rig (sin cámara)</button><button id="inf" disabled>💾 Guardar informe</button></header>
+<div class="bar">
+<label>Sensibilidad <input type="range" id="sens" min="50" max="160" value="100"></label>
+<label>Suavizado <input type="range" id="suav" min="0" max="100" value="55"></label>
+<label><input type="checkbox" id="kc" checked> Cara</label><label><input type="checkbox" id="kb" checked> Cuello, hombros y pecho</label><label><input type="checkbox" id="km" checked> Manos</label>
+<label><input type="checkbox" id="iy"> Invertir giro</label><label><input type="checkbox" id="ip"> Invertir cabeceo</label><label><input type="checkbox" id="ir"> Invertir inclinación</label>
+<label>Fondo <select id="fon"><option value="fa">Oscuro</option><option value="fv">Verde (OBS)</option><option value="ft">Transparente</option></select></label></div>
+<div id="msg"></div>
+<div class="grid"><div class="pan"><h2>Tu cámara</h2><video id="v" playsinline muted></video><canvas id="ov"></canvas></div>
+<div class="pan fa" id="pa"><h2>Tu cabra</h2><canvas id="c"></canvas></div></div>
+<div class="st"><div><small>FPS de dibujo</small><b id="s1">–</b></div><div><small>FPS de seguimiento</small><b id="s2">–</b></div><div><small>Cara (ms)</small><b id="s3">–</b></div><div><small>Cuerpo (ms)</small><b id="s4">–</b></div><div><small>Manos (ms)</small><b id="s5">–</b></div><div><small>Carga de modelos</small><b id="s6">–</b></div><div><small>Detectado</small><b id="s7">–</b></div><div><small>Motor</small><b id="s8">–</b></div></div>
+<pre id="rep">Estado: sin probar. Pulsa «Activar cámara».</pre>
+<script type="module">
+import * as THREE from "/av/three.module.min.js";
+const $=i=>document.getElementById(i),say=(t)=>$("msg").textContent=t;
+const TOKEN="__TOKEN__";
+/* ---------- escena ---------- */
+const cv=$("c"),R=new THREE.WebGLRenderer({canvas:cv,antialias:true,alpha:true});R.setPixelRatio(Math.min(devicePixelRatio,2));
+const SC=new THREE.Scene(),CAM=new THREE.PerspectiveCamera(32,4/3,.1,50);CAM.position.set(0,1.45,4.4);CAM.lookAt(0,1.25,0);
+SC.add(new THREE.HemisphereLight(0xcfe9ff,0x2a1a10,1.1));const dl=new THREE.DirectionalLight(0xfff0d8,2.2);dl.position.set(2,4,4);SC.add(dl);const rim=new THREE.DirectionalLight(0x35d0ff,1.3);rim.position.set(-3,2,-2);SC.add(rim);
+function resize(){const p=cv.parentElement,w=p.clientWidth,h=p.clientHeight;R.setSize(w,h,false);CAM.aspect=w/h;CAM.updateProjectionMatrix()}addEventListener("resize",resize);resize();
+const M={fur:new THREE.MeshStandardMaterial({color:0xe9e2d0,roughness:.95}),dark:new THREE.MeshStandardMaterial({color:0x2a2018,roughness:.7}),gold:new THREE.MeshStandardMaterial({color:0xc9a24a,roughness:.45,metalness:.5}),tq:new THREE.MeshStandardMaterial({color:0x0fb5a8,roughness:.6}),white:new THREE.MeshStandardMaterial({color:0xffffff,roughness:.3}),eye:new THREE.MeshStandardMaterial({color:0xf3c43c,roughness:.3}),pink:new THREE.MeshStandardMaterial({color:0xe7a9a0,roughness:.8})};
+const ell=(a,b,c,m,s=20)=>{const o=new THREE.Mesh(new THREE.SphereGeometry(1,s,Math.round(s*.7)),m);o.scale.set(a,b,c);return o};
+const G=(p,x=0,y=0,z=0)=>{const g=new THREE.Group();g.position.set(x,y,z);p&&p.add(g);return g};
+const rig={};
+function construir(){
+ const root=G(SC);rig.root=root;
+ const torso=G(root,0,0.5,0);rig.torso=torso;
+ const pecho=ell(.42,.5,.27,M.tq);pecho.position.y=.32;torso.add(pecho);const cuello_c=ell(.2,.12,.18,M.fur);cuello_c.position.y=.78;torso.add(cuello_c);
+ const cremallera=new THREE.Mesh(new THREE.BoxGeometry(.03,.6,.01),M.gold);cremallera.position.set(0,.32,.27);torso.add(cremallera);
+ const neck=G(torso,0,.8,0);rig.neck=neck;const nm=new THREE.Mesh(new THREE.CylinderGeometry(.13,.16,.3,16),M.fur);nm.position.y=.12;neck.add(nm);
+ const head=G(neck,0,.3,0);rig.head=head;const sk=ell(.27,.31,.27,M.fur,28);sk.position.y=.12;head.add(sk);
+ const sn=ell(.15,.16,.22,M.fur,24);sn.position.set(0,-.02,.28);head.add(sn);const nariz=ell(.06,.04,.03,M.dark,12);nariz.position.set(0,.03,.49);head.add(nariz);
+ const mand=G(head,0,-.1,.18);rig.jaw=mand;const jm=ell(.11,.05,.19,M.fur,16);jm.position.set(0,-.04,.14);mand.add(jm);const lengua=ell(.07,.015,.12,M.pink,10);lengua.position.set(0,-.005,.14);mand.add(lengua);
+ const barba=new THREE.Mesh(new THREE.ConeGeometry(.05,.2,10),M.fur);barba.position.set(0,-.17,.2);barba.rotation.x=Math.PI;mand.add(barba);
+ const boca=new THREE.Mesh(new THREE.TorusGeometry(.065,.008,6,16,Math.PI),M.dark);boca.position.set(0,-.075,.44);boca.rotation.z=Math.PI;head.add(boca);rig.boca=boca;
+ rig.ojo={};rig.parp={};rig.ceja={};
+ for(const s of[-1,1]){const k=s<0?"L":"R",ojo=G(head,s*.13,.14,.21);const gl=ell(.06,.06,.05,M.white,14);ojo.add(gl);const pup=ell(.04,.012,.01,M.dark,8);pup.position.z=.045;pup.scale.y=.012;ojo.add(pup);const iris=ell(.052,.052,.012,M.eye,14);iris.position.z=.04;ojo.add(iris);ojo.remove(pup);iris.add(pup);pup.position.set(0,0,.9);pup.scale.set(.7,.2,.3);rig.ojo[k]=ojo;
+  const pp=G(head,s*.13,.2,.235);const pl=ell(.068,.068,.03,M.fur,12);pl.position.y=-.06;pp.add(pl);pp.scale.y=.02;rig.parp[k]=pp;
+  const ce=new THREE.Mesh(new THREE.BoxGeometry(.1,.018,.02),M.dark);const cg=G(head,s*.14,.27,.25);cg.add(ce);rig.ceja[k]=cg;
+  const oreja=G(head,s*.27,.18,-.02);const om=ell(.2,.04,.08,M.fur,14);om.position.x=s*.16;oreja.add(om);oreja.rotation.z=s*-.25;rig["oreja"+k]=oreja;
+  const cuerno=new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([V(0,0,0),V(s*.03,.14,-.03),V(s*.09,.27,-.12),V(s*.07,.34,-.26)]),24,.03,8),M.gold);cuerno.position.set(s*.1,.34,0);head.add(cuerno);}
+ rig.brazo={};
+ for(const s of[-1,1]){const k=s<0?"L":"R",sh=G(torso,s*.46,.66,0);const hombro=ell(.1,.1,.1,M.tq,12);sh.add(hombro);const ua=G(sh);const um=new THREE.Mesh(new THREE.CapsuleGeometry(.075,.3,6,12),M.tq);um.position.y=-.2;ua.add(um);
+  const codo=G(ua,0,-.4);const fm=new THREE.Mesh(new THREE.CapsuleGeometry(.06,.28,6,12),M.fur);fm.position.y=-.18;codo.add(fm);
+  const muneca=G(codo,0,-.38);const pal=new THREE.Mesh(new THREE.BoxGeometry(.13,.14,.05),M.fur);pal.position.y=-.07;muneca.add(pal);
+  const dedos=[];const base=[[.045,.5],[.015,.56],[-.015,.54],[-.045,.46]];
+  base.forEach((b,i)=>{const sg=[.06,.04,.03];let par=muneca;const js=[];let y=-.14;for(let j=0;j<3;j++){const jg=G(par,j?0:s*b[0],j?-sg[j-1]:y);const m=new THREE.Mesh(new THREE.CapsuleGeometry(.014,sg[j]-.01,4,6),M.fur);m.position.y=-sg[j]/2;jg.add(m);js.push(jg);par=jg;}dedos.push(js)});
+  const pulg=[];{let par=muneca;const sg=[.05,.04,.03];for(let j=0;j<3;j++){const jg=G(par,j?0:-s*.075,j?-sg[j-1]:-.06);if(!j)jg.rotation.z=s*.7;const m=new THREE.Mesh(new THREE.CapsuleGeometry(.016,sg[j]-.01,4,6),M.fur);m.position.y=-sg[j]/2;jg.add(m);pulg.push(jg);par=jg;}}
+  rig.brazo[k]={sh,ua,codo,muneca,dedos,pulg,s,visible:false,ult:0}}
+ root.position.y=-.1;
+}
+function V(x,y,z){return new THREE.Vector3(x,y,z)}
+construir();
+/* ---------- utilidades ---------- */
+const S={sens:1,suav:.55,cara:true,cuerpo:true,manos:true,iy:false,ip:false,ir:false};
+const lam=()=>28-24*S.suav,BETA=8,MAXSTEP=.5;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function sigue(obj,tq,dt){const a=obj.quaternion.angleTo(tq);if(a<1e-4){obj.quaternion.copy(tq);return}let t=1-Math.exp(-dt*(lam()+BETA*a));t=Math.min(t,MAXSTEP/a,1);obj.quaternion.slerp(tq,t)}
+function sm(cur,tg,dt){return cur+(tg-cur)*(1-Math.exp(-dt*(lam()+BETA*Math.abs(tg-cur))))}
+const QI=new THREE.Quaternion();function limita(q,max){const a=q.angleTo(QI);if(a>max)q.slerp(QI,1-max/a);return q}
+const eul=(x,y,z)=>new THREE.Quaternion().setFromEuler(new THREE.Euler(x,y,z,"YXZ"));
+/* ---------- estado de tracking ---------- */
+const T={cal:{yaw:0,pit:0,rol:0,jaw:0,sonr:0,ceja:0,tYaw:0,tRol:0,tPit:0,shr:null},face:null,bs:{},pose:null,hands:[],stats:{f:[],p:[],h:[],tk:0,frames:0,cf:0,cp:0,ch:0,t0:0}};
+let blink={L:0,R:0},gz={x:0,y:0},cuerpoUlt=0,caraUlt=0;
+function aplicarCara(dt){
+ const b=T.bs,m=T.face;if(!m)return;
+ const q=new THREE.Quaternion();new THREE.Matrix4().fromArray(m).decompose(new THREE.Vector3(),q,new THREE.Vector3());
+ const d=V(0,0,1).applyQuaternion(q),u=V(0,1,0).applyQuaternion(q);
+ let yaw=-Math.atan2(d.x,d.z),pit=-Math.asin(clamp(d.y,-1,1)),rol=Math.atan2(u.x,u.y);
+ if(S.iy)yaw=-yaw;if(S.ip)pit=-pit;if(S.ir)rol=-rol;
+ yaw=(yaw-T.cal.yaw)*S.sens;pit=(pit-T.cal.pit)*S.sens;rol=(rol-T.cal.rol)*S.sens;
+ yaw=clamp(yaw,-1.2,1.2);pit=clamp(pit,-.7,.7);rol=clamp(rol,-.6,.6);
+ T.raw={yaw,pit,rol};
+ sigue(rig.head,eul(pit*.6,yaw*.6,rol*.6),dt);sigue(rig.neck,eul(pit*.4,yaw*.4,rol*.4),dt);
+ const g=k=>b[k]||0;
+ rig.jaw.rotation.x=sm(rig.jaw.rotation.x,clamp((g("jawOpen")-T.cal.jaw)*1.2*S.sens,0,.55),dt);
+ for(const [k,n] of [["L","eyeBlinkLeft"],["R","eyeBlinkRight"]]){blink[k]=sm(blink[k],clamp(g(n)*1.15,0,1),dt*1.6);rig.parp[k].scale.y=.02+blink[k]*.98}
+ const lookR=(g("eyeLookOutRight")+g("eyeLookInLeft")-g("eyeLookInRight")-g("eyeLookOutLeft"))/2,lookU=(g("eyeLookUpLeft")+g("eyeLookUpRight")-g("eyeLookDownLeft")-g("eyeLookDownRight"))/2;
+ gz.x=sm(gz.x,lookR,dt);gz.y=sm(gz.y,lookU,dt);for(const k of["L","R"]){rig.ojo[k].rotation.y=gz.x*.45;rig.ojo[k].rotation.x=-gz.y*.35}
+ const sonr=(g("mouthSmileLeft")+g("mouthSmileRight"))/2-T.cal.sonr;rig.boca.scale.y=sm(rig.boca.scale.y,.2+clamp(sonr*1.6,-.3,1.1),dt);
+ const ceU=g("browInnerUp")+(g("browOuterUpLeft")+g("browOuterUpRight"))/2-T.cal.ceja;
+ for(const k of["L","R"]){const dn=g(k==="L"?"browDownLeft":"browDownRight"),s=k==="L"?-1:1;rig.ceja[k].position.y=sm(rig.ceja[k].position.y,.27+clamp(ceU*.05,-.01,.07)-dn*.04,dt);rig.ceja[k].rotation.z=sm(rig.ceja[k].rotation.z,s*clamp(dn*.5-ceU*.15,-.4,.5),dt)}
+ const o=g("jawOpen");rig.orejaL.rotation.z=sm(rig.orejaL.rotation.z,.25-o*.2,dt);rig.orejaR.rotation.z=sm(rig.orejaR.rotation.z,-.25+o*.2,dt);
+}
+const sc=p=>V(-p.x,-p.y,-p.z);
+function aplicarCuerpo(dt){
+ const W=T.pose;if(!W)return;const P=i=>sc(W[i]);const ls=P(11),rs=P(12);
+ const v=rs.clone().sub(ls);let rol=Math.atan2(v.y,v.x),yaw=Math.atan2(-v.z,v.x),lean=0;
+ const hv=Math.min(W[23].visibility??1,W[24].visibility??1);
+ if(hv>.5){const sp=ls.clone().add(rs).multiplyScalar(.5).sub(P(23).add(P(24)).multiplyScalar(.5));lean=Math.atan2(sp.z,sp.y)}
+ if(S.ir)rol=-rol;if(S.iy)yaw=-yaw;
+ rol=clamp((rol-T.cal.tRol)*S.sens,-.5,.5);yaw=clamp((yaw-T.cal.tYaw)*S.sens,-.7,.7);lean=clamp((lean-T.cal.tPit)*S.sens,-.5,.5);
+ sigue(rig.torso,eul(lean*.7,yaw*.6,rol*.7),dt);
+ const shr=(ls.y+rs.y)/2-(P(7).y+P(8).y)/2;if(T.cal.shr==null)T.cal.shr=shr;const up=clamp((shr-T.cal.shr)*-1.5*S.sens,-.08,.12);
+ for(const k of["L","R"]){const a=rig.brazo[k];a.sh.position.y=sm(a.sh.position.y,.66+up,dt)}
+ rig.root.updateMatrixWorld(true);
+ const tqInv=rig.torso.getWorldQuaternion(new THREE.Quaternion()).invert();
+ for(const [k,si,ei,wi] of [["L",11,13,15],["R",12,14,16]]){const a=rig.brazo[k],vis=Math.min(W[si].visibility??1,W[ei].visibility??1,W[wi].visibility??1);
+  if(vis<.35){continue}
+  const dU=P(ei).sub(P(si)).normalize(),dF=P(wi).sub(P(ei)).normalize();
+  const qU=new THREE.Quaternion().setFromUnitVectors(V(0,-1,0),dU.clone().applyQuaternion(tqInv));
+  const wU=rig.torso.getWorldQuaternion(new THREE.Quaternion()).multiply(qU);
+  const qFw=new THREE.Quaternion().setFromUnitVectors(V(0,-1,0),dF);
+  const qE=wU.clone().invert().multiply(qFw);limita(qE,2.6);
+  sigue(a.ua,qU,dt);sigue(a.codo,qE,dt);a.vivo=true}
+}
+const DEDOS=[[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+function ang(a,b,c,d){const u=V(b.x-a.x,b.y-a.y,b.z-a.z).normalize(),w=V(d.x-c.x,d.y-c.y,d.z-c.z).normalize();return Math.acos(clamp(u.dot(w),-1,1))}
+function aplicarManos(dt){
+ for(const h of T.hands){const a=h.brazo;if(!a)continue;const L=h.w;if(!L)continue;
+  DEDOS.forEach((ix,i)=>{const js=a.dedos[i];const c1=ang(L[0],L[ix[0]],L[ix[0]],L[ix[1]]),c2=ang(L[ix[0]],L[ix[1]],L[ix[1]],L[ix[2]]),c3=ang(L[ix[1]],L[ix[2]],L[ix[2]],L[ix[3]]);
+   [c1,c2,c3].forEach((c,j)=>{js[j].rotation.x=sm(js[j].rotation.x,-clamp(c*1.1,0,1.75),dt)})});
+  const t1=ang(L[0],L[1],L[1],L[2]),t2=ang(L[1],L[2],L[2],L[3]),t3=ang(L[2],L[3],L[3],L[4]);[t1,t2,t3].forEach((c,j)=>{a.pulg[j].rotation.x=sm(a.pulg[j].rotation.x,-clamp(c*(j?1:.6),0,1.3),dt)});
+  const f=sc(L[9]).sub(sc(L[0])).normalize(),ac=sc(L[17]).sub(sc(L[5])).normalize(),yA=f.clone().negate(),xA=ac.clone().multiplyScalar(a.s).sub(yA.clone().multiplyScalar(ac.dot(yA)*a.s)).normalize(),zA=new THREE.Vector3().crossVectors(xA,yA);
+  const qW=new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xA,yA,zA));
+  const pq=a.codo.getWorldQuaternion(new THREE.Quaternion());const ql=pq.invert().multiply(qW);limita(ql,1.3);sigue(a.muneca,ql,dt);}
+}
+/* ---------- demo del rig (sin cámara) ---------- */
+let demo=false,td=0;
+function paraDemo(dt){td+=dt;const t=td;
+ sigue(rig.head,eul(Math.sin(t*.9)*.25,Math.sin(t*.7)*.6,Math.sin(t*.5)*.15),dt);sigue(rig.neck,eul(0,Math.sin(t*.7)*.2,0),dt);
+ rig.jaw.rotation.x=Math.max(0,Math.sin(t*6))*.45;const bl=Math.sin(t*1.7)>.97?1:0;for(const k of["L","R"])rig.parp[k].scale.y=.02+bl*.98;
+ rig.boca.scale.y=.2+Math.max(0,Math.sin(t*.8))*.9;for(const k of["L","R"]){rig.ceja[k].position.y=.27+Math.max(0,Math.sin(t*1.1))*.04;rig.ojo[k].rotation.y=Math.sin(t*1.3)*.4}
+ sigue(rig.torso,eul(Math.sin(t*.6)*.1,Math.sin(t*.4)*.3,Math.sin(t*.8)*.12),dt);
+ for(const k of["L","R"]){const a=rig.brazo[k],s=a.s,ph=k==="L"?0:1.6,up=(Math.sin(t*1.2+ph)+1)/2;
+  sigue(a.ua,new THREE.Quaternion().setFromEuler(new THREE.Euler(-up*1.4,0,-s*(.15+up*.8))),dt);sigue(a.codo,eul(-up*1.2,0,0),dt);
+  const cur=(Math.sin(t*2+ph)+1)/2*1.6;a.dedos.forEach(js=>js.forEach(j=>j.rotation.x=-cur*.9));a.pulg.forEach(j=>j.rotation.x=-cur*.5)}}
+/* ---------- bucle de dibujo ---------- */
+let last=performance.now(),fps=0,fr=0,fT=last;
+function lazo(){requestAnimationFrame(lazo);const n=performance.now(),dt=Math.min((n-last)/1000,.1);last=n;
+ if(demo)paraDemo(dt);else{if(trk.activo){if(S.cara&&n-caraUlt<400)aplicarCara(dt);if(S.cuerpo&&n-cuerpoUlt<400)aplicarCuerpo(dt);if(S.manos)aplicarManos(dt)}}
+ R.render(SC,CAM);fr++;if(n-fT>1000){fps=fr*1000/(n-fT);fr=0;fT=n;$("s1").textContent=fps.toFixed(0);$("s2").textContent=trk.activo?(T.stats.tk*1000/(n-T.stats.t0)).toFixed(0):"–"}}
+requestAnimationFrame(lazo);
+/* ---------- tracking ---------- */
+const trk={activo:false,F:null,P:null,H:null,delegate:"?"};
+const vid=$("v"),ov=$("ov"),octx=ov.getContext("2d");
+const avg=a=>a.length?(a.reduce((x,y)=>x+y,0)/a.length):0,push=(a,v)=>{a.push(v);if(a.length>60)a.shift()};
+async function cargar(){
+ const t0=performance.now();say("Cargando los modelos de seguimiento (tarda unos segundos)…");
+ const mp=await import("/av/vision_bundle.mjs");const fs=await mp.FilesetResolver.forVisionTasks("/av/wasm");
+ async function crear(Cls,url,extra){for(const del of["GPU","CPU"]){try{const o=await Cls.createFromOptions(fs,{baseOptions:{modelAssetPath:url,delegate:del},runningMode:"VIDEO",...extra});trk.delegate=del;return o}catch(e){console.warn(del,e);if(del==="CPU")throw e}}}
+ trk.F=await crear(mp.FaceLandmarker,"/av/modelos/face_landmarker.task",{outputFaceBlendshapes:true,outputFacialTransformationMatrixes:true,numFaces:1});
+ trk.P=await crear(mp.PoseLandmarker,"/av/modelos/pose_landmarker_lite.task",{numPoses:1});
+ trk.H=await crear(mp.HandLandmarker,"/av/modelos/hand_landmarker.task",{numHands:2});
+ trk.carga=performance.now()-t0;$("s6").textContent=(trk.carga/1000).toFixed(1)+" s";$("s8").textContent=trk.delegate;
+}
+function dibuja(face,pose,hands){const w=ov.width=vid.videoWidth||640,h=ov.height=vid.videoHeight||480;octx.clearRect(0,0,w,h);octx.fillStyle="#35d0ff";
+ if(face)for(const p of face)octx.fillRect(p.x*w-1,p.y*h-1,2,2);
+ if(pose){octx.strokeStyle="#ffb800";octx.lineWidth=3;for(const [a,b] of[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24]]){const A=pose[a],B=pose[b];octx.beginPath();octx.moveTo(A.x*w,A.y*h);octx.lineTo(B.x*w,B.y*h);octx.stroke()}}
+ octx.fillStyle="#3ddc97";for(const hd of hands||[])for(const p of hd)octx.fillRect(p.x*w-2,p.y*h-2,4,4)}
+let lastV=-1;
+function paso(){if(!trk.activo)return;vid.requestVideoFrameCallback?vid.requestVideoFrameCallback(paso):requestAnimationFrame(paso);
+ if(vid.readyState<2||vid.currentTime===lastV)return;lastV=vid.currentTime;const ts=performance.now(),St=T.stats;St.frames++;St.tk++;let fL=null,pL=null,hL=null;
+ try{
+  if(S.cara){const t=performance.now(),r=trk.F.detectForVideo(vid,ts);push(St.f,performance.now()-t);if(r.faceLandmarks?.length){fL=r.faceLandmarks[0];St.cf++;T.bs={};for(const c of r.faceBlendshapes[0].categories)T.bs[c.categoryName]=c.score;T.face=r.facialTransformationMatrixes[0].data;caraUlt=performance.now()}}
+  if(S.cuerpo){const t=performance.now(),r=trk.P.detectForVideo(vid,ts+.01);push(St.p,performance.now()-t);if(r.worldLandmarks?.length){pL=r.landmarks[0];St.cp++;T.pose=r.worldLandmarks[0];cuerpoUlt=performance.now()}}
+  if(S.manos){const t=performance.now(),r=trk.H.detectForVideo(vid,ts+.02);push(St.h,performance.now()-t);T.hands=[];hL=[];
+   if(r.landmarks?.length&&pL){St.ch++;r.landmarks.forEach((lm,i)=>{hL.push(lm);const best=[["L",15],["R",16]].map(([k,wi])=>({k,d:Math.hypot(lm[0].x-pL[wi].x,lm[0].y-pL[wi].y)})).sort((a,b)=>a.d-b.d)[0];if(best.d<.25)T.hands.push({brazo:rig.brazo[best.k],w:r.worldLandmarks[i]})})}}
+ }catch(e){console.error(e);say("Error de seguimiento: "+e.message)}
+ dibuja(fL,pL,hL);
+ if(St.frames%15===0){$("s3").textContent=avg(St.f).toFixed(1);$("s4").textContent=avg(St.p).toFixed(1);$("s5").textContent=avg(St.h).toFixed(1);$("s7").textContent=`${fL?"cara ":""}${pL?"cuerpo ":""}${hL&&hL.length?hL.length+" mano(s)":""}`||"nada"}}
+$("ini").onclick=async()=>{demo=false;$("ini").disabled=true;try{
+  say("Pidiendo permiso de cámara…");const st=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,frameRate:30},audio:false});vid.srcObject=st;await vid.play();
+  if(!trk.F)await cargar();trk.activo=true;T.stats.t0=performance.now();T.stats.tk=0;say("Seguimiento activo. Siéntate de frente, con hombros y manos a la vista, y pulsa «Calibrar».");$("cal").disabled=false;$("inf").disabled=false;paso();
+ }catch(e){say("No he podido arrancar: "+(e.message||e));$("ini").disabled=false;console.error(e)}};
+$("cal").onclick=()=>{const r=T.raw||{yaw:0,pit:0,rol:0};const c=T.cal,b=T.bs;
+ if(T.face){const q=new THREE.Quaternion();new THREE.Matrix4().fromArray(T.face).decompose(new THREE.Vector3(),q,new THREE.Vector3());const d=V(0,0,1).applyQuaternion(q),u=V(0,1,0).applyQuaternion(q);c.yaw=(S.iy?1:1)*-Math.atan2(d.x,d.z)*(S.iy?-1:1);c.pit=-Math.asin(clamp(d.y,-1,1))*(S.ip?-1:1);c.rol=Math.atan2(u.x,u.y)*(S.ir?-1:1);c.jaw=b.jawOpen||0;c.sonr=((b.mouthSmileLeft||0)+(b.mouthSmileRight||0))/2;c.ceja=(b.browInnerUp||0)+((b.browOuterUpLeft||0)+(b.browOuterUpRight||0))/2}
+ if(T.pose){const W=T.pose,P=i=>sc(W[i]),v=P(12).sub(P(11));c.tRol=Math.atan2(v.y,v.x)*(S.ir?-1:1);c.tYaw=Math.atan2(-v.z,v.x)*(S.iy?-1:1);const sp=P(11).add(P(12)).multiplyScalar(.5).sub(P(23).add(P(24)).multiplyScalar(.5));c.tPit=Math.atan2(sp.z,sp.y);c.shr=(P(11).y+P(12).y)/2-(P(7).y+P(8).y)/2}
+ say("Calibrado. Tu postura actual es el punto neutro.")};
+$("demo").onclick=()=>{demo=!demo;$("demo").textContent=demo?"■ Parar demo":"▶ Demo del rig (sin cámara)";say(demo?"Esto es solo una animación de prueba del esqueleto de la cabra. NO es seguimiento de tu cámara.":"")};
+const bind=(i,f)=>$(i).oninput=$(i).onchange=()=>f($(i));bind("sens",e=>S.sens=e.value/100);bind("suav",e=>S.suav=e.value/100);bind("kc",e=>S.cara=e.checked);bind("kb",e=>S.cuerpo=e.checked);bind("km",e=>S.manos=e.checked);bind("iy",e=>S.iy=e.checked);bind("ip",e=>S.ip=e.checked);bind("ir",e=>S.ir=e.checked);
+$("fon").onchange=()=>{$("pa").className="pan "+$("fon").value};
+$("inf").onclick=async()=>{const St=T.stats,n=St.frames||1,seg=(performance.now()-St.t0)/1000;const inf={fecha:new Date().toISOString(),navegador:navigator.userAgent,delegado:trk.delegate,carga_modelos_s:+(trk.carga/1000).toFixed(2),duracion_s:+seg.toFixed(1),fps_dibujo:+fps.toFixed(1),fps_seguimiento:+(St.tk/seg).toFixed(1),ms_cara:+avg(St.f).toFixed(1),ms_cuerpo:+avg(St.p).toFixed(1),ms_manos:+avg(St.h).toFixed(1),video:`${vid.videoWidth}x${vid.videoHeight}`,deteccion_cara_pct:+(St.cf*100/n).toFixed(0),deteccion_cuerpo_pct:+(St.cp*100/n).toFixed(0),deteccion_manos_pct:+(St.ch*100/n).toFixed(0),ajustes:S};
+ $("rep").textContent="INFORME DE RENDIMIENTO\n"+JSON.stringify(inf,null,1);try{await fetch("/api/avatar-informe",{method:"POST",headers:{"x-cb":TOKEN,"content-type":"application/json"},body:JSON.stringify(inf)});say("Informe guardado en tu carpeta de Cabra Beats (avatar-informe.json).")}catch(e){say("No he podido guardarlo: "+e.message)}};
+window.__rig=rig;window.__S=S;
+</script></body></html>

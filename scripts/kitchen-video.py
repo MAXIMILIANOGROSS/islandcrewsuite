@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""ISLAND CREW KITCHEN · montaje de un Short (1080x1920, ≤60 s) a partir de las escenas de una receta.
+Lo que se ve sale de TOMAS REALES (biblioteca propia o clips con licencia gratuita de Pexels); NO se inventan imágenes: si falta una toma, la producción queda BLOQUEADA y se dice cuál.
+Voz: la misma de la Fábrica (Kokoro / voces Premium del Mac). Subtítulos exactos: se generan con la duración real de cada frase de voz (sin adivinar).
+Uso:  python3 scripts/kitchen-video.py --prueba      (comprueba el montaje con tomas sintéticas, NO es un vídeo de receta)"""
+# PATH_EXTRA: el worker arranca desde launchd sin /opt/homebrew/bin; sin esto no encuentra ffmpeg ni ffprobe.
+import os as _os
+_os.environ["PATH"] = _os.pathsep.join([x for x in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/sbin"] if x not in _os.environ.get("PATH", "")] + [_os.environ.get("PATH", "")])
+import glob, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.parse, urllib.request
+W, H, FPS, MAX_S = 1080, 1920, 30, 60.0
+AZUL, AMARILLO = "07182E", "FFD600"
+def _dur(p): return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", p]).decode().strip())
+def _run(args): r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error"] + args, capture_output=True, text=True); return r.returncode == 0, r.stderr[-700:]
+def _base(salida): d = os.path.join(salida, "kitchen"); [os.makedirs(os.path.join(d, x), exist_ok=True) for x in ("clips", "videos", "musica", "_tmp")]; return d
+def _indice(d):
+    try: return json.load(open(os.path.join(d, "clips", "indice.json"), encoding="utf8"))
+    except Exception: return {}
+def _guardar_indice(d, i): open(os.path.join(d, "clips", "indice.json"), "w", encoding="utf8").write(json.dumps(i, ensure_ascii=False, indent=1))
+def _tokens(t): return {x for x in re.findall(r"[a-záéíóúñ]+", t.lower()) if len(x) > 2 and x not in ("the", "and", "with", "top", "view", "hands", "hand", "board", "wooden", "close")}
+def buscar_toma(d, accion, consulta, usadas):
+    """1) biblioteca local (misma acción y alguna palabra del ingrediente) 2) Pexels (licencia gratuita, uso comercial) si hay PEXELS_API_KEY. Devuelve (ruta, origen) o (None, motivo)."""
+    ind = _indice(d); tk = _tokens(consulta); mejor = None
+    for arch, m in ind.items():
+        p = os.path.join(d, "clips", arch)
+        if not os.path.isfile(p) or p in usadas: continue
+        s = len(tk & set(m.get("etiquetas", []))) + (3 if m.get("accion") == accion else 0)
+        if m.get("accion") == accion and len(tk & set(m.get("etiquetas", []))) >= 1 and (not mejor or s > mejor[0]): mejor = (s, p, m.get("fuente", "propio"))
+    if mejor: return mejor[1], mejor[2]
+    key = os.environ.get("PEXELS_API_KEY", "").strip(); pk = os.environ.get("PIXABAY_API_KEY", "").strip()
+    if not key and not pk: return None, "sin toma en la biblioteca y sin PEXELS_API_KEY ni PIXABAY_API_KEY"
+    if not key: return _pixabay(d, ind, accion, consulta, tk, usadas, pk)
+    try:
+        rq = urllib.request.Request("https://api.pexels.com/videos/search?" + urllib.parse.urlencode({"query": consulta, "orientation": "portrait", "per_page": 8, "size": "medium"}), headers={"Authorization": key, "User-Agent": "IslandCrewKitchen/1.0"})
+        for v in json.loads(urllib.request.urlopen(rq, timeout=30).read()).get("videos", []):
+            fs = [f for f in v.get("video_files", []) if f.get("file_type") == "video/mp4" and (f.get("height") or 0) >= 1080 and (f.get("width") or 0) <= 1440]
+            if not fs or v.get("duration", 0) < 4: continue
+            f = sorted(fs, key=lambda x: x.get("height", 0))[0]; arch = f"pexels_{v['id']}.mp4"; p = os.path.join(d, "clips", arch)
+            if p in usadas: continue
+            if not os.path.isfile(p): open(p, "wb").write(urllib.request.urlopen(urllib.request.Request(f["link"], headers={"User-Agent": "IslandCrewKitchen/1.0"}), timeout=120).read())
+            ind[arch] = {"accion": accion, "etiquetas": sorted(tk), "fuente": "pexels", "licencia": "Pexels License (uso comercial gratuito, sin atribución obligatoria)", "url_origen": v.get("url", ""), "consulta": consulta}; _guardar_indice(d, ind); return p, "pexels"
+    except Exception as e:
+        if pk: return _pixabay(d, ind, accion, consulta, tk, usadas, pk)
+        return None, "Pexels falló: " + str(e)[:80]
+    if pk: return _pixabay(d, ind, accion, consulta, tk, usadas, pk)
+    return None, "Pexels no tiene una toma adecuada"
+def _pixabay(d, ind, accion, consulta, tk, usadas, pk):
+    """Pixabay (licencia gratuita, uso comercial). Las tomas horizontales se recortan a vertical al montar."""
+    try:
+        rq = urllib.request.Request("https://pixabay.com/api/videos/?" + urllib.parse.urlencode({"key": pk, "q": consulta[:90], "per_page": 12, "safesearch": "true"}), headers={"User-Agent": "IslandCrewKitchen/1.0"})
+        for v in json.loads(urllib.request.urlopen(rq, timeout=30).read()).get("hits", []):
+            vs = v.get("videos", {}); f = vs.get("large") or vs.get("medium")
+            if not f or not f.get("url") or v.get("duration", 0) < 4 or (f.get("height") or 0) < 1000: continue
+            arch = f"pixabay_{v['id']}.mp4"; p = os.path.join(d, "clips", arch)
+            if p in usadas: continue
+            if not os.path.isfile(p): open(p, "wb").write(urllib.request.urlopen(urllib.request.Request(f["url"], headers={"User-Agent": "IslandCrewKitchen/1.0"}), timeout=120).read())
+            ind[arch] = {"accion": accion, "etiquetas": sorted(tk), "fuente": "pixabay", "licencia": "Pixabay Content License (uso comercial gratuito)", "url_origen": v.get("pageURL", ""), "consulta": consulta}; _guardar_indice(d, ind); return p, "pixabay"
+    except Exception as e: return None, "Pixabay falló: " + str(e)[:80]
+    return None, "Pixabay no tiene una toma adecuada"
+def _ass_t(s): h, m = int(s // 3600), int(s % 3600 // 60); return f"{h}:{m:02d}:{s % 60:05.2f}"
+def _trozos(txt, n=4): p = txt.split(); return [" ".join(p[i:i + n]) for i in range(0, len(p), n)] or [""]
+def hacer_ass(escenas, tiempos, ruta):
+    cab = f"[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\nStyle: Sub,Arial,74,&H00FFFFFF,&H00FFFFFF,&H00180B07,&H64000000,1,0,0,0,100,100,0,0,1,6,2,2,60,60,300,1\nStyle: Marca,Arial,40,&H0000D6FF,&H0000D6FF,&H00180B07,&H00000000,1,0,0,0,100,100,2,0,1,3,0,8,40,40,70,1\nStyle: Card,Arial,110,&H0000D6FF,&H0000D6FF,&H00180B07,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,70,70,0,1\nStyle: Card2,Arial,56,&H00FFFDF7,&H00FFFDF7,&H00180B07,&H00000000,0,0,0,0,100,100,2,0,1,3,0,5,90,90,260,1\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
+    ev = [f"Dialogue: 0,{_ass_t(0)},{_ass_t(tiempos[-1][1])},Marca,,0,0,0,,ISLAND CREW KITCHEN"]
+    for e, (a, b, dv) in zip(escenas, tiempos):
+        if e["tipo"] in ("marca", "cta"):
+            t1 = "ISLAND CREW\\NKITCHEN" if e["tipo"] == "marca" else "SÍGUENOS"; t2 = "RECETAS CON ALMA DE ISLA" if e["tipo"] == "marca" else "Receta completa en islandcrew.es/kitchen"
+            ev.append(f"Dialogue: 1,{_ass_t(a)},{_ass_t(b)},Card,,0,0,0,,{t1}"); ev.append(f"Dialogue: 1,{_ass_t(a)},{_ass_t(b)},Card2,,0,0,0,,{t2}")
+        frases = _trozos(re.sub(r"islandcrew punto es barra kitchen", "islandcrew.es/kitchen", e["narracion"])); tot = sum(len(x) for x in frases) or 1; t = a + 0.15
+        for fr in frases:
+            dd = max(0.4, dv * len(fr) / tot); ev.append(f"Dialogue: 2,{_ass_t(t)},{_ass_t(min(b, t + dd))},Sub,,0,0,0,,{fr.replace(chr(10), ' ')}"); t += dd
+    open(ruta, "w", encoding="utf8").write(cab + "\n".join(ev) + "\n")
+def medir(video):
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", video, "-af", "ebur128=peak=true", "-f", "null", "-"], capture_output=True, text=True).stderr; i = r.rfind("Integrated loudness"); lufs = pico = None
+    m = re.search(r"I:\s+(-?[\d.]+) LUFS", r[i:]) if i >= 0 else None; lufs = float(m.group(1)) if m else None; m2 = re.search(r"Peak:\s+(-?[\d.]+) dBFS", r[i:]) if i >= 0 else None; pico = float(m2.group(1)) if m2 else None
+    return {"duracion_s": round(_dur(video), 2), "lufs": lufs, "pico_db": pico, "clipping": bool(pico is not None and pico > -0.1)}
+def montar(prod, salida, voz_fn, web=None, prueba=False):
+    """prod: {produccion_id, slug, escenas:[...], receta}. Devuelve (estado, mensaje, datos). Nada se publica aquí."""
+    d = _base(salida); tmp = tempfile.mkdtemp(prefix="kitchen-");  # carpeta LOCAL (sin espacios ni permisos del T5): ffmpeg lanzado por launchd no puede escribir en el disco externo
+    esc = prod["escenas"]; usadas = set(); segs = []; faltan = []; voces = []
+    try:
+        for e in esc:  # 1) voz de cada escena, con su duración real
+            w = os.path.join(tmp, f"v{e['orden']}.wav"); motor = voz_fn(e["narracion"], "mujer", w)
+            if not motor or not os.path.isfile(w): return "fallo", "No hay voz disponible (Kokoro o voz Premium del Mac).", {}
+            voces.append((w, _dur(w), motor))
+        t = 0.0; tiempos = []
+        for e, (w, dv, _) in zip(esc, voces): dur = max(float(e["segundos"]), dv + 0.35); tiempos.append((t, t + dur, dv)); t += dur
+        if t > MAX_S: return "bloqueada", f"Con la voz real dura {t:.1f} s (máximo 60): hay que acortar la receta o la narración.", {"duracion_s": round(t, 1)}
+        for e, (a, b, dv) in zip(esc, tiempos):  # 2) una toma real por escena
+            dur = b - a; seg = os.path.join(tmp, f"s{e['orden']}.mp4")
+            if e["tipo"] in ("marca", "cta"): ok, er = _run(["-f", "lavfi", "-i", f"color=c=0x{AZUL}:s={W}x{H}:r={FPS}:d={dur:.2f}", "-c:v", "libx264", "-pix_fmt", "yuv420p", seg]); segs.append(seg); continue
+            clip, origen = buscar_toma(d, e["accion"], e.get("busqueda", ""), usadas)
+            if not clip: faltan.append(f"escena {e['orden']} ({e['accion']} · {e.get('busqueda', '')[:50]}): {origen}"); continue
+            usadas.add(clip); ok, er = _run(["-stream_loop", "-1", "-i", clip, "-t", f"{dur:.2f}", "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps={FPS},format=yuv420p", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", seg])
+            if not ok: return "fallo", "ffmpeg falló recortando una toma: " + er, {}
+            segs.append(seg)
+        if faltan: return "bloqueada", "Faltan tomas reales: " + " | ".join(faltan[:6]), {"clips_cubiertos": len(segs), "clips_total": len(esc)}
+        lista = os.path.join(tmp, "lista.txt"); open(lista, "w").write("".join(f"file '{s}'\n" for s in segs)); mudo = os.path.join(tmp, "mudo.mp4")
+        ok, er = _run(["-f", "concat", "-safe", "0", "-i", lista, "-c", "copy", mudo]);
+        if not ok: return "fallo", "No se pudo unir las escenas: " + er, {}
+        ass = os.path.join(tmp, "sub.ass"); hacer_ass(esc, tiempos, ass)  # 3) subtítulos con la duración real de cada frase
+        entradas = []; filtros = []
+        for i, ((w, dv, _), (a, b, _dv)) in enumerate(zip(voces, tiempos)): entradas += ["-i", w]; filtros.append(f"[{i + 1}:a]adelay={int(a * 1000)}|{int(a * 1000)},apad=whole_dur={t:.2f}[v{i}]")
+        mix = "".join(f"[v{i}]" for i in range(len(voces))) + f"amix=inputs={len(voces)}:normalize=0:duration=longest,highpass=f=90,acompressor=threshold=0.1:ratio=3[voz]"
+        musica = sorted(glob.glob(os.path.join(d, "musica", "*.mp3")) + glob.glob(os.path.join(d, "musica", "*.wav"))); mus = ""
+        if musica:
+            m = musica[int(hashlib.md5(prod.get("slug", "x").encode()).hexdigest(), 16) % len(musica)]; entradas += ["-stream_loop", "-1", "-i", m]; mus = os.path.basename(m)
+            fc = ";".join(filtros) + ";" + mix + f";[voz]asplit=2[vo][sc];[{len(voces) + 1}:a]volume=0.5[bg];[bg][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=500[bgd];[vo][bgd]amix=inputs=2:normalize=0:duration=first,loudnorm=I=-14:TP=-1.5:LRA=11,atrim=0:{t:.2f}[a]"
+        else: fc = ";".join(filtros) + ";" + mix + f";[voz]loudnorm=I=-14:TP=-1.5:LRA=11,atrim=0:{t:.2f}[a]"
+        out_final = os.path.join(d, "videos", (prod.get("slug") or "receta") + ".mp4"); out = os.path.join(tmp, "final.mp4"); ass_f = ass.replace(chr(92), "/").replace(":", chr(92) + ":").replace("'", chr(92) + "'"); vf = f"subtitles='{ass_f}'"
+        ok, er = _run(["-i", mudo] + entradas + ["-filter_complex", fc, "-vf", vf, "-map", "0:v", "-map", "[a]", "-t", f"{t:.2f}", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out])
+        if not ok: return "fallo", "ffmpeg falló en el montaje final (¿falta libass para los subtítulos?): " + er, {}
+        try: shutil.copyfile(out, out_final + ".part"); os.replace(out_final + ".part", out_final)
+        except Exception as ex: return "fallo", f"El vídeo se montó pero no se pudo guardar en {out_final}: {ex}", {}
+        out = out_final
+        m = medir(out); m.update({"subtitulos": True, "resolucion": f"{W}x{H}", "logo": True, "voz": voces[0][2], "musica": mus}); return "montado", ("Montado" + ("" if mus else " sin música (pon pistas en kitchen/musica)") + f": {m['duracion_s']} s"), {"video_archivo": out, "medidas": m, "clips_cubiertos": len(esc), "clips_total": len(esc)}
+    finally: shutil.rmtree(tmp, ignore_errors=True)
+def prueba():
+    """Comprueba que el montaje funciona con tomas SINTÉTICAS de prueba. El resultado NO es un vídeo de receta ni se debe publicar."""
+    base = tempfile.mkdtemp(); d = _base(base); esc = []
+    def e(o, tipo, acc, seg, nar, bus): return {"orden": o, "tipo": tipo, "accion": acc, "segundos": seg, "narracion": nar, "busqueda": bus}
+    esc = [e(1, "gancho", "emplatar", 3, "¿Tienes diez minutos? Hoy preparamos algo rico.", "plato"), e(2, "ingredientes", "colocar", 5, "Necesitamos tomate y cebolla.", "tomate"), e(3, "paso", "cortar", 6, "Cortamos el tomate en dados.", "tomate"), e(4, "paso", "saltear", 6, "Salteamos todo en la sartén.", "sarten"), e(5, "resultado", "emplatar", 5, "¡Y listo!", "plato"), e(6, "marca", "emplatar", 5, "Así de fácil. Esto es Island Crew Kitchen.", ""), e(7, "cta", "emplatar", 6, "Síguenos para descubrir cinco recetas nuevas cada día.", "")]
+    ind = {}
+    for i, (acc, tags, color) in enumerate([("emplatar", ["plato"], "orange"), ("colocar", ["tomate"], "red"), ("cortar", ["tomate"], "green"), ("saltear", ["sarten"], "blue"), ("emplatar", ["plato"], "pink")]):
+        f = f"prueba_{i}.mp4"; _run(["-f", "lavfi", "-i", f"testsrc2=s=720x1280:r=30:d=8", "-vf", f"hue=h={i * 60}", "-pix_fmt", "yuv420p", os.path.join(d, "clips", f)]); ind[f] = {"accion": acc, "etiquetas": tags, "fuente": "propio", "licencia": "sintética de prueba"}
+    _guardar_indice(d, ind)
+    def voz(t, v, w): _run(["-f", "lavfi", "-i", f"sine=f=220:d={max(1.2, len(t.split()) / 2.6):.2f}", "-ar", "24000", w]); return "silencio-de-prueba"
+    est, msg, datos = montar({"slug": "prueba-montaje", "escenas": esc}, base, voz, prueba=True); print(est, msg, json.dumps(datos.get("medidas", {}))); return est == "montado"
+def procesar(fm, t, tid=""):
+    """Tarea de la cola del Mac: busca tomas, monta el vídeo y lo registra en la web. Devuelve True si queda montado."""
+    p = t["peticion"]; pid = p.get("produccion_id"); web = lambda estado, **k: fm._web("/api/oficina/kitchen-registrar", dict({"produccion_id": pid, "estado": estado}, **k))
+    web("produciendo", mensaje="Buscando tomas y grabando la voz"); est, msg, datos = montar(p, fm.SALIDA, fm._sint)
+    web(est, mensaje=msg, herramientas="ffmpeg · " + ("Pexels · " if os.environ.get("PEXELS_API_KEY") else "") + ("Pixabay · " if os.environ.get("PIXABAY_API_KEY") else "") + "voz " + str((datos.get("medidas") or {}).get("voz", "")), **datos); print("Kitchen:", est, msg, flush=True); return est == "montado"
+def publicar(fm, t):
+    """Sube el Short ya montado y aprobado a YouTube (categoría «Consejos y estilo»). Privado salvo que el fundador lo haya pedido público. La web VERIFICA la URL antes de darla por publicada."""
+    import importlib.util
+    p = t["peticion"]; pid = p.get("produccion_id"); web = lambda **k: fm._web("/api/oficina/kitchen-registrar", dict({"produccion_id": pid}, **k))
+    ruta = os.path.realpath(str(p.get("video_archivo", ""))); base = os.path.realpath(os.path.join(fm.SALIDA, "kitchen", "videos"))
+    if not ruta.startswith(base + os.sep) or not os.path.isfile(ruta): web(estado="fallo", mensaje="No encuentro el vídeo montado en el Mac."); return False
+    sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(os.path.abspath(__file__)), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+    try: r = yt.subir(ruta, str(p.get("titulo", "Island Crew Kitchen"))[:100], str(p.get("descripcion", "")), yt.token_valido(False), bool(p.get("publico")), None, "26")
+    except SystemExit as x: web(estado="fallo", mensaje="YouTube no subió: " + str(x)[:200]); return False
+    except Exception as x: web(estado="fallo", mensaje="YouTube no subió: " + str(x)[:200]); return False
+    url = f"https://www.youtube.com/shorts/{r['id']}"; priv = (r.get("status") or {}).get("privacyStatus", "private"); print("Kitchen · YouTube:", url, priv, flush=True)
+    web(estado="montado", youtube_url=url, privacidad=priv, mensaje=f"Subido a YouTube ({priv}). Pendiente de verificación en la web."); return True
+def procesar_short(fm, t, tid=""):
+    """Tarea «shorts-video»: monta el Short de una idea de la Fábrica de Shorts (misma tubería real que Kitchen: tomas con licencia, voz del Mac, subtítulos exactos)."""
+    p = t["peticion"]; web = lambda estado, **k: fm._web("/api/oficina/shorts-registrar", dict({"idea_id": p.get("idea_id"), "idioma": p.get("idioma", "es"), "estado": estado}, **k))
+    web("produciendo", mensaje="Buscando tomas y grabando la voz"); est, msg, datos = montar({"slug": p.get("slug", "short"), "escenas": p["escenas"]}, fm.SALIDA, fm._sint)
+    web(est, mensaje=msg, video_archivo=datos.get("video_archivo"), medidas=datos.get("medidas")); print("Short:", est, msg, flush=True); return est == "montado"
+def publicar_short(fm, t):
+    """Tarea «shorts-publicar»: sube el Short montado a YouTube (privado salvo que se pida público). La web verifica la URL antes de darlo por publicado."""
+    import importlib.util
+    p = t["peticion"]; web = lambda **k: fm._web("/api/oficina/shorts-registrar", dict({"idea_id": p.get("idea_id"), "idioma": p.get("idioma", "es")}, **k))
+    ruta = os.path.realpath(str(p.get("video_archivo", ""))); base = os.path.realpath(os.path.join(fm.SALIDA, "kitchen", "videos"))
+    if not ruta.startswith(base + os.sep) or not os.path.isfile(ruta): web(estado="fallo", mensaje="No encuentro el vídeo montado en el Mac."); return False
+    sp = importlib.util.spec_from_file_location("yt", os.path.join(os.path.dirname(os.path.abspath(__file__)), "youtube-subir.py")); yt = importlib.util.module_from_spec(sp); sp.loader.exec_module(yt)
+    try: r = yt.subir(ruta, str(p.get("titulo", "Island Crew"))[:100], str(p.get("descripcion", "")), yt.token_valido(False), bool(p.get("publico")), None, "24")
+    except BaseException as x: web(estado="fallo", mensaje="YouTube no subió: " + str(x)[:200]); return False
+    url = f"https://www.youtube.com/shorts/{r['id']}"; priv = (r.get("status") or {}).get("privacyStatus", "private"); print("Short · YouTube:", url, priv, flush=True)
+    web(youtube_url=url, privacidad=priv); return True
+if __name__ == "__main__":
+    if "--prueba" in sys.argv: sys.exit(0 if prueba() else 1)
+    print(__doc__)

@@ -1,0 +1,3 @@
+// node --experimental-strip-types scripts/finance-report.mjs  → tabla de los tres escenarios (hipótesis)
+import { run, SCENARIOS } from "../src/lib/finance/model.ts";
+for (const s of SCENARIOS) { const r = run(s); console.log(`\n${s.name}: punto de equilibrio mes ${r.breakEvenMonth ?? "no se alcanza en 36 m"} · capital máx. necesario ${r.peakCapital} € · ARR m36 ${r.arr36} € · margen bruto m36 ${r.grossMargin36}%`); for (const m of [12, 24, 36]) { const x = r.rows[m - 1]; console.log(`  m${m}: ${x.biz} empresas, ${x.plus} Plus, MRR ${x.mrr} €, costes ${x.costs} €, neto ${x.net} €, caja acum. ${x.cash} €`); } }

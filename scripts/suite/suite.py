@@ -242,6 +242,11 @@ class Hub(H):
             if a == "importar": return self._j({"ok": True, "n": conexiones.importar_dev()})
             if a == "yt_secreto": ok2, m = conexiones.yt_guardar_secreto(d.get("txt", "")); return self._j({"ok": ok2, "mensaje": m})
             if a == "yt_conectar": ok2, m = conexiones.yt_conectar(); return self._j({"ok": ok2, "mensaje": m})
+            if a == "publicar":
+                import base64
+                try: ib = base64.b64decode(d.get("img") or "") or None
+                except Exception: ib = None
+                return self._j({"ok": True, "mensaje": conexiones.publicar(d.get("txt", ""), ib, d.get("url", ""), bool(d.get("fb")), bool(d.get("ig")))})
             if a == "probar":
                 ok2, m = conexiones.probar(r); return self._j({"ok": ok2, "mensaje": m})
             return self._j({"ok": False})

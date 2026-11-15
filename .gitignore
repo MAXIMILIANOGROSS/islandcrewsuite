@@ -5,3 +5,11 @@ __pycache__/
 claves.json
 clave-privada*
 *.log
+*.mp3
+*.wav
+*.mp4
+*.safetensors
+*.pt
+*.ckpt
+token.json
+client_secret*.json
