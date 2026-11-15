@@ -83,6 +83,7 @@ def html(h):
     h = h.replace("__CABRA__", datauri()).replace("__CABRA_GRANDE__", datauri("cabra-social.jpg")).replace("__CONTROL__", datauri("control.jpg"))
     for k in ("carta", "publicaciones", "anuncios", "musica"): h = h.replace("__IC_%s__" % k, datauri("ic-%s.png" % k))
     for k in ("carta", "publicaciones", "anuncios"): h = h.replace("__AV_%s__" % k, datauri("av-%s.jpg" % k))
+    for k in re.findall(r"__A_([a-z-]+)__", h): h = h.replace("__A_%s__" % k, datauri("a-%s.jpg" % k))
     try:
         d, p = _diccionario()
         js = _JS.replace("__D__", json.dumps(d, ensure_ascii=False)).replace("__P__", json.dumps(p, ensure_ascii=False)).replace("__DEF__", idioma_def())
