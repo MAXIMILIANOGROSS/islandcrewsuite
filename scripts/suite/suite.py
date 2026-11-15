@@ -225,11 +225,26 @@ class Hub(H):
             g = lambda k, d=None: (q.get(k) or [d])[0]
             try: return self._j(centro.api(g("p", "30d"), g("d1"), g("d2"), actividad()[2]))
             except Exception as e: return self._j({"error": str(e)})
+        if self.path.startswith("/api/conexiones"):
+            import conexiones
+            return self._j({"estado": conexiones.estado(), "dev": conexiones.hay_dev()})
+        if self.path.startswith("/conexiones"):
+            b = marca.html(open(os.path.join(AQUI, "conexiones.html"), encoding="utf8").read()).encode("utf8"); self.send_response(200); self.send_header("content-type", "text/html; charset=utf-8"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         if self.path.startswith("/centro"):
             b = marca.html(open(os.path.join(AQUI, "centro.html"), encoding="utf8").read()).encode("utf8"); self.send_response(200); self.send_header("content-type", "text/html; charset=utf-8"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         b = open(os.path.join(AQUI, "inicio.html"), encoding="utf8").read(); b = marca.html(b).encode("utf8"); self.send_response(200); self.send_header("content-type", "text/html; charset=utf-8"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
         d = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or "{}"); c = cargar(); ok, j = lic.comprobar(c.get("licencia", ""))
+        if self.path.startswith("/api/conexiones"):
+            import conexiones; a = d.get("a"); r = d.get("r")
+            if a == "guardar": conexiones.guardar(r, d); return self._j({"ok": True})
+            if a == "borrar": conexiones.borrar(r); return self._j({"ok": True})
+            if a == "importar": return self._j({"ok": True, "n": conexiones.importar_dev()})
+            if a == "yt_secreto": ok2, m = conexiones.yt_guardar_secreto(d.get("txt", "")); return self._j({"ok": ok2, "mensaje": m})
+            if a == "yt_conectar": ok2, m = conexiones.yt_conectar(); return self._j({"ok": ok2, "mensaje": m})
+            if a == "probar":
+                ok2, m = conexiones.probar(r); return self._j({"ok": ok2, "mensaje": m})
+            return self._j({"ok": False})
         if d.get("a"): return self._j(centro_post(d))
         f = d.get("f")
         if f == "musica":

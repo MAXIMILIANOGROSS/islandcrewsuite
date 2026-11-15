@@ -2,6 +2,7 @@
 """Island Crew Suite · traducciones de la interfaz (ES -> EN, IT, DE). Clave = texto español exacto."""
 T = [
 ("Monitor de actividad", "Activity monitor", "Monitor attività", "Aktivitätsmonitor"),
+("Conexiones", "Connections", "Connessioni", "Verbindungen"),
 ("Centro de inteligencia", "Intelligence Center", "Centro di intelligence", "Intelligence Center"),
 ("En marcha", "Running", "In esecuzione", "Läuft"),
 ("Parado", "Stopped", "Fermo", "Gestoppt"),

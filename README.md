@@ -1,5 +1,7 @@
 # Island Crew Suite
 
+🇪🇸 Español · [🇬🇧 English](README.en.md)
+
 <p align="center"><img src="docs/img/control.jpg" width="320" alt="La cabra del control"></p>
 
 Suite de escritorio de **Island Crew Marketing**: cuatro programas independientes y un panel monitor en el Escritorio, con ventana propia en Mac y Windows, en español, inglés, italiano y alemán.
@@ -14,6 +16,9 @@ Suite de escritorio de **Island Crew Marketing**: cuatro programas independiente
 
 ## Centro de inteligencia
 Cuadro de mando con datos reales de los programas: indicadores globales, paneles por unidad (Cabra Beats, Carta Viva, Cabra Social), comparativa de periodos, analista de negocio, alertas, finanzas manuales e informes PDF. Lo que no se registra se muestra como «sin datos»; nunca se inventa.
+
+## Conexiones
+Pantalla «Conexiones» con guía de cuatro pasos para conectar Instagram, Facebook y YouTube. Las claves se guardan solo en el ordenador del usuario, nunca en el paquete. La subida automática a YouTube usa el motor de Cabra Beats.
 
 ## Estructura
 - `scripts/suite/` · panel, licencias, ventana nativa, instaladores, Centro de inteligencia.

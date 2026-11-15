@@ -11,7 +11,8 @@ dl() { [ -s "$CACHE/$2" ] || { echo "Descargando $2 ..."; curl -fL --retry 3 -o 
 
 echo "== Aplicación"
 rm -rf "$OUT/app"; mkdir -p "$OUT/app/scripts/suite" "$OUT/app/scripts/carta-viva" "$OUT/app/scripts/publicaciones" "$OUT/app/scripts/anuncios"
-cp "$SUITE"/{core.py,lic.py,suite.py,asistente.html,inicio.html,clave-publica.txt,marca.py,i18n_data.py,centro.py,centro.html,centro_txt.py,marca.jpg,cabra-social.jpg,ic-carta.png,ic-publicaciones.png,ic-anuncios.png,ic-musica.png,control.jpg,av-carta.jpg,av-publicaciones.jpg,av-anuncios.jpg} "$OUT/app/scripts/suite/"
+cp "$SUITE/../youtube-subir.py" "$OUT/app/scripts/suite/"
+cp "$SUITE"/{core.py,lic.py,suite.py,asistente.html,inicio.html,clave-publica.txt,marca.py,i18n_data.py,centro.py,conexiones.py,conexiones.html,centro.html,centro_txt.py,marca.jpg,cabra-social.jpg,ic-carta.png,ic-publicaciones.png,ic-anuncios.png,ic-musica.png,control.jpg,av-carta.jpg,av-publicaciones.jpg,av-anuncios.jpg} "$OUT/app/scripts/suite/"
 cp "$SCR/carta-viva/carta-viva-app.py" "$SCR/carta-viva/carta-viva-app.html" "$OUT/app/scripts/carta-viva/"
 [ -f "$SCR/carta-viva/cabra-logo.png" ] && cp "$SCR/carta-viva/cabra-logo.png" "$OUT/app/scripts/carta-viva/"
 cp "$SCR/publicaciones/publicaciones-app.py" "$SCR/publicaciones/publicaciones-app.html" "$OUT/app/scripts/publicaciones/"
