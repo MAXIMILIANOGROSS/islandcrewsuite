@@ -71,7 +71,7 @@ function ck(){var m=document.cookie.match(/(?:^|; )icl=([a-z]{2})/);return m?m[1
 var L=ck();if(LG.indexOf(L)<0)L="es";var X=LG.indexOf(L)-1;
 function t(s){if(X<0||!s)return s;var k=s.trim();if(!k)return s;var v=D[k];if(v)return v[X]?s.replace(k,v[X]):s;
 for(var i=0;i<P.length;i++){var m=k.match(new RegExp(P[i][0]));if(m){var r=P[i][1][X];if(r)return s.replace(k,r.replace(/\$(\d)/g,function(_,n){return m[n]||""}))}}return s}
-function w(n){if(n.nodeType==3){var x=t(n.nodeValue);if(x!==n.nodeValue)n.nodeValue=x;return}if(n.nodeType!=1)return;var g=n.tagName;if(g=="SCRIPT"||g=="STYLE"||n.id=="ic-lang")return;
+window.icT=t;function w(n){if(n.nodeType==3){var x=t(n.nodeValue);if(x!==n.nodeValue)n.nodeValue=x;return}if(n.nodeType!=1)return;var g=n.tagName;if(g=="SCRIPT"||g=="STYLE"||n.id=="ic-lang")return;
 ["placeholder","title","aria-label"].forEach(function(a){var v=n.getAttribute(a);if(v){var x=t(v);if(x!==v)n.setAttribute(a,x)}});for(var c=n.firstChild;c;c=c.nextSibling)w(c)}
 function selector(){var s=document.createElement("select");s.id="ic-lang";s.title="Idioma / Language";LG.forEach(function(l){var o=document.createElement("option");o.value=l;o.textContent="🌐 "+NM[l];if(l==L)o.selected=true;s.appendChild(o)});
 s.style.cssText="background:#0008;color:#fff;border:1px solid #fff4;border-radius:8px;padding:5px 8px;font:13px system-ui;cursor:pointer;margin-right:12px;width:auto;flex:none";
